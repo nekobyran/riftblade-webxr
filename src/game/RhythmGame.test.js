@@ -9,6 +9,7 @@ import {
   autoPerfectJudgement,
   createBeatmapFromTrack,
   directionRotationZ,
+  evaluateTouchSwipe,
   isAutoPerfectMoment,
   noteVisualTransform,
   shouldFinishMode,
@@ -104,6 +105,8 @@ describe('automatic and pure-enjoyment modes', () => {
   it('visibly drives the desktop AI sabers into the authored note lane and row', () => {
     const game = new RhythmGame({ canvas: {}, music: { getTime: () => 12 } });
     const controller = new THREE.Group();
+    controller.visible = false;
+    controller.matrixAutoUpdate = false;
     controller.userData.hand = Hand.LEFT;
     game.controllers = [controller];
     game.renderer = { xr: { isPresenting: false } };
@@ -116,6 +119,8 @@ describe('automatic and pure-enjoyment modes', () => {
     expect(controller.position.x).toBeCloseTo(laneToX(-0.5), 5);
     expect(controller.position.y).toBeCloseTo(rowToY(1), 5);
     expect(controller.rotation.z).toBeCloseTo(directionRotationZ(CutDirection.RIGHT), 5);
+    expect(controller.visible).toBe(true);
+    expect(controller.matrixAutoUpdate).toBe(true);
   });
 
   it('completes the first real hit with particles, ring, shards, score and HUD feedback', () => {
@@ -191,12 +196,82 @@ describe('cross-surface interaction API', () => {
     expect(received.filter(([type]) => type === GameplayEvent.VR_MENU)).toHaveLength(2);
   });
 
-  it('clamps both mobile saber sticks and exposes drag-to-look rotation', () => {
+  it('matches direct mobile swipes against all eight fixed arrow directions', () => {
+    const gestures = {
+      [CutDirection.UP]: [0, -60],
+      [CutDirection.DOWN]: [0, 60],
+      [CutDirection.LEFT]: [-60, 0],
+      [CutDirection.RIGHT]: [60, 0],
+      [CutDirection.UP_LEFT]: [-60, -60],
+      [CutDirection.UP_RIGHT]: [60, -60],
+      [CutDirection.DOWN_LEFT]: [-60, 60],
+      [CutDirection.DOWN_RIGHT]: [60, 60],
+    };
+    for (const [direction, [dx, dy]] of Object.entries(gestures)) {
+      expect(evaluateTouchSwipe(direction, 100, 100, 100 + dx, 100 + dy)).toMatchObject({ ready: true, ok: true, direction });
+      expect(evaluateTouchSwipe(direction, 100, 100, 100 - dx, 100 - dy).ok).toBe(false);
+    }
+    expect(evaluateTouchSwipe(CutDirection.ANY, 0, 0, 40, 10).ok).toBe(true);
+    expect(evaluateTouchSwipe(CutDirection.RIGHT, 0, 0, 8, 0)).toMatchObject({ ready: false, reason: 'too-short' });
+  });
+
+  it('hits the touched note only after a correctly directed, in-time swipe', () => {
+    const note = { id: 'touch-note', time: 5, lane: -0.5, row: 0, hand: Hand.LEFT, direction: CutDirection.UP };
+    const game = new RhythmGame({ canvas: {}, music: { getTime: () => 5 } });
+    game.phase = 'playing';
+    game.mode = GAME_MODES.STANDARD;
+    game.renderer = { xr: { isPresenting: false } };
+    game.runtime.active = [note];
+    game._pickTouchNote = vi.fn(() => ({ note, timing: 0 }));
+    game._spawnTouchSlash = vi.fn();
+    game._hitNote = vi.fn();
+
+    expect(game.beginTouchSlice(7, 100, 120)).toMatchObject({ accepted: true, noteId: 'touch-note' });
+    expect(game.updateTouchSlice(7, 100, 70)).toMatchObject({ accepted: true, hit: true, noteId: 'touch-note' });
+    expect(game._spawnTouchSlash).toHaveBeenCalledWith(expect.any(Object), note, true);
+    expect(game._hitNote).toHaveBeenCalledWith(note, expect.objectContaining({ reason: 'touch-swipe', source: 'touch-swipe' }));
+    expect(game.touchSlices.size).toBe(0);
+  });
+
+  it('renders a bright themed 3D saber trail for a mobile direction swipe', () => {
     const game = new RhythmGame({ canvas: {} });
-    expect(game.updateTouchSaber(Hand.LEFT, -9, 8, true)).toEqual({ hand: Hand.LEFT, x: -1, y: 1, active: true });
-    expect(game.updateTouchSaber(Hand.RIGHT, 9, -8, true)).toEqual({ hand: Hand.RIGHT, x: 1, y: -1, active: true });
-    expect(game.rotateView(100, -100)).toMatchObject({ yaw: expect.any(Number), pitch: expect.any(Number) });
-    expect(game.viewRotation.yaw).not.toBe(0);
+    game.scene = new THREE.Scene();
+    game.lowPower = true;
+    game._spawnTouchSlash(
+      { startX: 100, startY: 120, lastX: 100, lastY: 50 },
+      { lane: -0.5, row: 0, hand: Hand.LEFT, direction: CutDirection.UP },
+      true,
+    );
+
+    const slash = game.scene.getObjectByName('touch-saber-slash');
+    expect(slash?.getObjectByName('touch-saber-slash-aura')?.material?.blending).toBe(THREE.AdditiveBlending);
+    expect(slash?.getObjectByName('touch-saber-slash-light')?.intensity).toBeGreaterThan(1);
+    game._clearDamageEffects();
+  });
+
+  it('spawns luminous obstacle walls and settles left-right dodges exactly once', () => {
+    const eventTarget = new EventTarget();
+    const obstacleEvents = [];
+    eventTarget.addEventListener(GameplayEvent.OBSTACLE, (event) => obstacleEvents.push(event.detail));
+    const game = new RhythmGame({ canvas: {}, eventTarget, music: { getTime: () => 0 } });
+    game.scene = new THREE.Scene();
+    game.scene.add(game.obstacleGroup);
+    game.player = new THREE.Group();
+    game.scene.add(game.player);
+    game.renderer = { xr: { isPresenting: false } };
+    game.phase = 'playing';
+    game.track = { id: 'obstacle-qa', title: 'Obstacle QA', duration: 20 };
+    game.obstacleRuntime.reset([{ id: 'wall-a', time: 1, blockedLane: -1, safeLane: 1, accent: true }]);
+
+    game._updateObstacles(0);
+    expect(game.obstacleGroup.getObjectByName('obstacle-wall')).toBeTruthy();
+    expect(game.obstacleGroup.getObjectByName('obstacle-wall-aura')?.material?.blending).toBe(THREE.AdditiveBlending);
+    expect(game.dodge(1)).toMatchObject({ accepted: true, lane: 1 });
+    game._updateObstacles(1);
+
+    expect(obstacleEvents).toHaveLength(1);
+    expect(obstacleEvents[0]).toMatchObject({ id: 'wall-a', outcome: 'passed', playerLane: 1 });
+    expect(game.obstacleMeshes.size).toBe(0);
   });
 
   it('always pauses desktop play and opens the interactive selector on XR session start', () => {

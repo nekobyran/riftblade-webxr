@@ -817,24 +817,14 @@ export class AppUI {
 
   renderHud(track) {
     const hud = this.state.hud;
-    const lifePercent = Math.round(clamp01(hud.life) * 100);
-    const progressPercent = Math.round(clamp01(hud.progress) * 100);
     const isPlaying = [GamePhase.PLAYING, GamePhase.PAUSED].includes(this.state.phase);
+    const showScore = isPlaying && this.state.mode !== GameMode.ZEN;
     return `
-      <aside class="hud-panel ${isPlaying ? 'is-live' : ''}" aria-label="实时游戏信息" aria-hidden="${String(!isPlaying)}">
-        <div class="hud-track"><span>${esc(MODE_COPY[this.state.mode].label)}</span><b>${esc(track ? this.trackTitle(track) : '待机')}</b></div>
-        <div class="hud-score"><span>分数</span><strong>${formatNumber(hud.score)}</strong></div>
-        <dl class="hud-stats">
-          <div><dt>连击</dt><dd>${formatNumber(hud.combo)}</dd></div>
-          <div><dt>准度</dt><dd>${Math.round(hud.accuracy)}%</dd></div>
-          <div><dt>失误</dt><dd>${formatNumber(hud.misses)}</dd></div>
-        </dl>
-        <div class="meter" data-kind="${lifePercent <= 32 ? 'critical' : 'safe'}"><span style="width:${lifePercent}%"></span><small>护盾 ${lifePercent}%</small></div>
-        <div class="meter progress-meter"><span style="width:${progressPercent}%"></span><small>${formatTime(hud.time)} / ${formatTime(hud.duration)}</small></div>
-        <button class="hud-pause" type="button" data-action="pause" ${this.state.phase === GamePhase.PLAYING ? '' : 'disabled'}>暂停</button>
-        <p class="signal-line">${esc(this.state.lastSignal)}</p>
-        ${this.state.impact ? `<div class="damage-banner" role="alert">${esc(this.state.impact.label)}</div>` : ''}
-      </aside>`;
+      <aside class="hud-panel hud-score-only ${showScore ? 'is-live' : ''}" aria-label="总得分" aria-hidden="${String(!showScore)}">
+        <output class="hud-total-score" aria-live="polite">${formatNumber(hud.score)}</output>
+      </aside>
+      <button class="hud-pause hud-pause-floating ${isPlaying ? 'is-live' : ''}" type="button" data-action="pause" aria-label="暂停游戏" ${this.state.phase === GamePhase.PLAYING ? '' : 'disabled'}>Ⅱ</button>
+      ${this.state.impact && isPlaying ? `<div class="damage-banner damage-banner-floating" role="alert">${esc(this.state.impact.label)}</div>` : ''}`;
   }
 
   renderCountdown() {

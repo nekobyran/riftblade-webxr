@@ -28,6 +28,151 @@ export const DEFAULT_RULES = Object.freeze({
   accentBonus: 35,
 });
 
+const OBSTACLE_OPENING_SECONDS = 5;
+const OBSTACLE_ENDING_SECONDS = 2.5;
+const MAX_GENERATED_OBSTACLES = 32;
+
+function clampNumber(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function hashObstacleSeed(value) {
+  let hash = 2166136261;
+  for (const character of String(value)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function seededObstacleUnit(seed) {
+  let value = hashObstacleSeed(seed) + 0x6d2b79f5;
+  value = Math.imul(value ^ (value >>> 15), value | 1);
+  value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+}
+
+function obstacleSide(value) {
+  const numeric = Number(value);
+  if (numeric < 0) return -1;
+  if (numeric > 0) return 1;
+  return 0;
+}
+
+function obstacleIdPrefix(track) {
+  const source = String(track?.id || track?.title || 'track').trim().toLowerCase();
+  return source.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'track';
+}
+
+function normalizeObstacles(obstacles, track = {}) {
+  const duration = Number(track?.duration);
+  const hasDuration = Number.isFinite(duration) && duration >= 0;
+  const prefix = obstacleIdPrefix(track);
+  const candidates = (Array.isArray(obstacles) ? obstacles : [])
+    .map((obstacle, sourceIndex) => {
+      const time = Number(obstacle?.time);
+      if (!Number.isFinite(time) || time < 0 || (hasDuration && time > duration)) return null;
+
+      const authoredBlockedLane = obstacleSide(obstacle?.blockedLane);
+      const authoredSafeLane = obstacleSide(obstacle?.safeLane);
+      const blockedLane = authoredBlockedLane
+        || (authoredSafeLane ? -authoredSafeLane : (seededObstacleUnit(`${prefix}:${time}:${sourceIndex}`) < 0.5 ? -1 : 1));
+
+      return {
+        id: String(obstacle?.id || '').trim() || `${prefix}-obstacle-${sourceIndex + 1}`,
+        time: Math.round(time * 1000) / 1000,
+        blockedLane,
+        safeLane: -blockedLane,
+        accent: Boolean(obstacle?.accent),
+        sourceIndex,
+      };
+    })
+    .filter(Boolean)
+    .sort((first, second) => first.time - second.time || first.sourceIndex - second.sourceIndex);
+
+  const usedIds = new Set();
+  const usedTimes = new Set();
+  const normalized = [];
+  for (const candidate of candidates) {
+    const timeKey = Math.round(candidate.time * 1000);
+    // Two opposing walls at the same instant could leave no valid dodge lane.
+    if (usedTimes.has(timeKey)) continue;
+    usedTimes.add(timeKey);
+
+    const baseId = candidate.id;
+    let id = baseId;
+    let suffix = 2;
+    while (usedIds.has(id)) {
+      id = `${baseId}-${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(id);
+    normalized.push({
+      id,
+      time: candidate.time,
+      blockedLane: candidate.blockedLane,
+      safeLane: candidate.safeLane,
+      accent: candidate.accent,
+    });
+  }
+  return normalized;
+}
+
+/**
+ * Returns authored obstacles when present, otherwise produces a deterministic,
+ * beat-aligned dodge sequence from stable track metadata.
+ */
+export function createObstacleMap(track = {}) {
+  if (Array.isArray(track?.obstacles)) return normalizeObstacles(track.obstacles, track);
+
+  const duration = Number(track?.duration);
+  if (!Number.isFinite(duration) || duration <= 0) return [];
+
+  const bpm = clampNumber(Number(track?.bpm) || 120, 60, 200);
+  const beatDuration = 60 / bpm;
+  const openingBuffer = Math.max(OBSTACLE_OPENING_SECONDS, beatDuration * 8);
+  const endingBuffer = Math.max(OBSTACLE_ENDING_SECONDS, beatDuration * 4);
+  const usableDuration = duration - openingBuffer - endingBuffer;
+  const targetSpacing = clampNumber(beatDuration * 16, 8, 12);
+  const count = Math.min(MAX_GENERATED_OBSTACLES, Math.floor(usableDuration / targetSpacing));
+  if (count <= 0) return [];
+
+  const prefix = obstacleIdPrefix(track);
+  const seed = `${prefix}:${bpm}:${duration}`;
+  const slotDuration = usableDuration / (count + 1);
+  const obstacles = [];
+  const usedTimes = new Set();
+  const startingSide = seededObstacleUnit(`${seed}:side`) < 0.5 ? -1 : 1;
+
+  for (let index = 0; index < count; index += 1) {
+    const center = openingBuffer + slotDuration * (index + 1);
+    const jitterLimit = Math.min(slotDuration * 0.18, beatDuration * 1.5);
+    const jitter = (seededObstacleUnit(`${seed}:time:${index}`) * 2 - 1) * jitterLimit;
+    let time = Math.round((center + jitter) / beatDuration) * beatDuration;
+    time = clampNumber(time, openingBuffer, duration - endingBuffer);
+    time = Math.round(time * 1000) / 1000;
+
+    let timeKey = Math.round(time * 1000);
+    while (usedTimes.has(timeKey) && time + beatDuration <= duration - endingBuffer) {
+      time = Math.round((time + beatDuration) * 1000) / 1000;
+      timeKey = Math.round(time * 1000);
+    }
+    if (usedTimes.has(timeKey)) continue;
+    usedTimes.add(timeKey);
+
+    const blockedLane = index % 2 === 0 ? startingSide : -startingSide;
+    obstacles.push({
+      id: `${prefix}-obstacle-${index + 1}`,
+      time,
+      blockedLane,
+      safeLane: -blockedLane,
+      accent: index % 4 === 3 || seededObstacleUnit(`${seed}:accent:${index}`) > 0.72,
+    });
+  }
+
+  return obstacles.sort((first, second) => first.time - second.time);
+}
+
 export function createGameState(overrides = {}) {
   return {
     phase: GamePhase.MENU,
@@ -289,6 +434,75 @@ export class BeatmapRuntime {
 
   isComplete() {
     return this.nextIndex >= this.beatmap.length && this.active.length === 0;
+  }
+}
+
+export class ObstacleRuntime {
+  constructor(obstacles = [], rules = DEFAULT_RULES) {
+    const configuredSpawnAhead = typeof rules === 'number' ? rules : Number(rules?.spawnAhead);
+    this.spawnAhead = Number.isFinite(configuredSpawnAhead)
+      ? Math.max(0, configuredSpawnAhead)
+      : DEFAULT_RULES.spawnAhead;
+    this.reset(obstacles);
+  }
+
+  reset(obstacles = this.obstacles) {
+    this.obstacles = normalizeObstacles(obstacles, { id: 'runtime-obstacle' });
+    this.nextIndex = 0;
+    this.active = [];
+    this.resolvedIds = new Set();
+  }
+
+  update(currentTime, playerLane = 0) {
+    const now = Number.isFinite(Number(currentTime)) ? Number(currentTime) : 0;
+    const spawned = [];
+    const collided = [];
+    const passed = [];
+
+    while (this.nextIndex < this.obstacles.length && this.obstacles[this.nextIndex].time - now <= this.spawnAhead) {
+      const obstacle = { ...this.obstacles[this.nextIndex], spawnedAt: now };
+      this.active.push(obstacle);
+      spawned.push(obstacle);
+      this.nextIndex += 1;
+    }
+
+    for (const obstacle of [...this.active]) {
+      if (now < obstacle.time) continue;
+      const settlement = this.resolve(obstacle.id, playerLane, now);
+      if (!settlement) continue;
+      if (settlement.outcome === 'passed') passed.push(settlement);
+      else collided.push(settlement);
+    }
+
+    return {
+      spawned,
+      collided,
+      passed,
+      active: [...this.active],
+      complete: this.isComplete(),
+    };
+  }
+
+  resolve(obstacleId, playerLane = 0, atTime) {
+    const id = String(obstacleId);
+    if (this.resolvedIds.has(id)) return null;
+    const index = this.active.findIndex((obstacle) => obstacle.id === id);
+    if (index < 0) return null;
+
+    const [obstacle] = this.active.splice(index, 1);
+    const lane = obstacleSide(playerLane);
+    const outcome = lane === obstacle.safeLane ? 'passed' : 'collided';
+    this.resolvedIds.add(id);
+    return {
+      ...obstacle,
+      playerLane: lane,
+      resolvedAt: Number.isFinite(Number(atTime)) ? Number(atTime) : obstacle.time,
+      outcome,
+    };
+  }
+
+  isComplete() {
+    return this.nextIndex >= this.obstacles.length && this.active.length === 0;
   }
 }
 

@@ -43,4 +43,6 @@ export const GameplayEvent = Object.freeze({
   VR_MENU: 'game:vr-menu',
   CUSTOM_TRACK: 'game:custom-track',
   AUDIO_ANALYSIS: 'game:audio-analysis',
+  DODGE: 'game:get-dodge',
+  OBSTACLE: 'game:obstacle',
 });

@@ -7,7 +7,10 @@ import {
   DEFAULT_RULES,
   NOTE_PLANE_Z,
   NOTE_ROW_COUNT,
+  ObstacleRuntime,
+  SPAWN_Z,
   ScoreKeeper,
+  createObstacleMap,
   createDesktopSweep,
   directionVector,
   judgeCut,
@@ -17,6 +20,7 @@ import {
 } from './RhythmLogic.js';
 import { VRMenu } from './VRMenu.js';
 import { VRHud, createHapticProfile } from './VRHud.js';
+import { CosmicBackdrop } from './CosmicBackdrop.js';
 
 export const GAME_MODES = Object.freeze({ STANDARD: 'standard', AUTO: 'auto', ZEN: 'zen' });
 
@@ -113,6 +117,8 @@ const HAND_COLORS = Object.freeze({
   [Hand.RIGHT]: 0xff4fd8,
 });
 
+const TOUCH_HIT_WINDOW = 0.32;
+
 export class RhythmGame {
   constructor({ canvas, eventTarget = new EventTarget(), music = null, tracks = [], mode = GAME_MODES.STANDARD, onVRSelection = null } = {}) {
     if (!canvas) throw new Error('RhythmGame requires a canvas');
@@ -127,6 +133,8 @@ export class RhythmGame {
     this.track = null;
     this.beatmap = [];
     this.runtime = new BeatmapRuntime([], this.rules);
+    this.obstacleMap = [];
+    this.obstacleRuntime = new ObstacleRuntime([], this.rules);
     this.phase = GamePhase.MENU;
     this.clock = new THREE.Clock(false);
     this.fallbackStart = 0;
@@ -137,23 +145,26 @@ export class RhythmGame {
     this.camera = null;
     this.player = null;
     this.noteGroup = new THREE.Group();
+    this.obstacleGroup = new THREE.Group();
     this.environmentGroup = new THREE.Group();
+    this.cosmicBackdrop = null;
     this.sabers = new Map();
     this.controllers = [];
     this.grips = [];
     this.controllerState = new Map();
     this.sweepQueue = [];
     this.noteMeshes = new Map();
+    this.obstacleMeshes = new Map();
     this.damageEffects = [];
     this.pendingTimers = new Set();
     this.vrButton = null;
     this.vrMenu = null;
     this.vrHud = null;
     this.desktopPointer = { x: 0, y: 0, active: false };
-    this.touchSabers = {
-      [Hand.LEFT]: { x: -0.55, y: 0, active: false, previousX: -0.55, previousY: 0 },
-      [Hand.RIGHT]: { x: 0.55, y: 0, active: false, previousX: 0.55, previousY: 0 },
-    };
+    this.touchSlices = new Map();
+    this.touchRaycaster = new THREE.Raycaster();
+    this.touchPointer = new THREE.Vector2();
+    this.dodgeState = { lane: 0, targetLane: 0, visualX: 0 };
     this.viewRotation = { yaw: 0, pitch: 0 };
     this.reducedMotion = false;
     this.lowPower = false;
@@ -166,6 +177,7 @@ export class RhythmGame {
     this._boundSessionStart = () => {
       this.renderer?.setPixelRatio?.(1);
       this.renderer?.xr?.setFoveation?.(this.lowPower ? 1 : 0.65);
+      this._resetDodge();
       // Entering a headset must never strand the player in a desktop-only
       // state. Pause an already-running desktop session and always surface the
       // ray-interactive selector at the start of the XR session.
@@ -177,6 +189,7 @@ export class RhythmGame {
     };
     this._boundSessionEnd = () => {
       this.closeVRMenu('sessionend');
+      this._resetDodge();
       this.vrHud?.setPresenting?.(false);
       this.renderer?.setPixelRatio?.(Math.min(globalThis.devicePixelRatio || 1, this.lowPower ? 1.2 : 1.75));
       if (this.vrButton) this.vrButton.textContent = 'ENTER VR';
@@ -204,6 +217,7 @@ export class RhythmGame {
     this.scene.add(this.player);
     this.scene.add(this.environmentGroup);
     this.scene.add(this.noteGroup);
+    this.scene.add(this.obstacleGroup);
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.xr.enabled = true;
@@ -245,7 +259,7 @@ export class RhythmGame {
       if (this.disposed || !this.renderer) return;
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.72, 0.58, 0.72);
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.96, 0.68, 0.64);
       this.composer.addPass(this.bloomPass);
     } catch {
       // Bloom is enhancement-only; direct Three.js rendering remains playable.
@@ -275,9 +289,13 @@ export class RhythmGame {
   loadTrack(track) {
     this.track = track || null;
     this.beatmap = createBeatmapFromTrack(track);
+    this.obstacleMap = createObstacleMap(track);
     this.runtime.reset(this.mode === GAME_MODES.ZEN ? [] : this.beatmap);
+    this.obstacleRuntime.reset(this.mode === GAME_MODES.ZEN ? [] : this.obstacleMap);
     this.score = new ScoreKeeper(this.rules);
     this._clearNotes();
+    this._clearObstacles();
+    this._resetDodge();
     const themeKey = resolveTheme(track);
     this._buildEnvironment(themeKey);
     this._applySaberStyle(resolveDamageStyle(track));
@@ -319,7 +337,9 @@ export class RhythmGame {
     this.vrMenu?.setMode?.(next);
     if (changed && this.phase === GamePhase.PLAYING) {
       this._clearNotes();
+      this._clearObstacles();
       this.runtime.reset(next === GAME_MODES.ZEN ? [] : this.beatmap);
+      this.obstacleRuntime.reset(next === GAME_MODES.ZEN ? [] : this.obstacleMap);
     }
     this._emit(GameplayEvent.MODE_CHANGE, { mode: next, trackId: this.track?.id || null, source, changed });
     return next;
@@ -386,8 +406,11 @@ export class RhythmGame {
     if (!this.renderer) await this.initialize();
     if (!this.track) this.loadTrack(createFallbackTrack());
     this._clearNotes();
+    this._clearObstacles();
     this.runtime.reset(this.mode === GAME_MODES.ZEN ? [] : this.beatmap);
+    this.obstacleRuntime.reset(this.mode === GAME_MODES.ZEN ? [] : this.obstacleMap);
     this.score = new ScoreKeeper(this.rules);
+    this._resetDodge();
     this.fallbackStart = performance.now() / 1000;
     this.clock.start();
     await this.music?.start?.(this.track, 0);
@@ -418,6 +441,8 @@ export class RhythmGame {
     this.music?.stop?.();
     this.clock.stop();
     this._clearNotes();
+    this._clearObstacles();
+    this._resetDodge();
     this._setPhase(GamePhase.MENU);
     if (this.renderer?.xr?.isPresenting) this.openVRMenu();
   }
@@ -457,7 +482,11 @@ export class RhythmGame {
     this.pendingTimers.clear();
     this.vrMenu?.dispose?.();
     this.vrHud?.dispose?.();
+    this.cosmicBackdrop?.dispose?.();
+    this.cosmicBackdrop = null;
+    this.touchSlices.clear();
     this._clearNotes();
+    this._clearObstacles();
     this._clearDamageEffects();
     this.scene?.traverse((object) => {
       object.geometry?.dispose?.();
@@ -474,6 +503,7 @@ export class RhythmGame {
     this.grips.length = 0;
     this.damageEffects.length = 0;
     this.noteMeshes.clear();
+    this.obstacleMeshes.clear();
   }
 
   _buildLights() {
@@ -500,6 +530,13 @@ export class RhythmGame {
 
   _buildEnvironment(themeKey) {
     const theme = THEME_PRESETS[themeKey] || THEME_PRESETS.neon;
+    this.activeTheme = theme;
+    if (!this.cosmicBackdrop) {
+      this.cosmicBackdrop = new CosmicBackdrop({ theme, lowPower: this.lowPower, reducedMotion: this.reducedMotion, seed: 0x51a7c05 });
+      this.scene?.add(this.cosmicBackdrop.group);
+    } else {
+      this.cosmicBackdrop.setTheme(theme);
+    }
     clearGroup(this.environmentGroup);
     this.scene.fog = new THREE.FogExp2(theme.fog, 0.037);
     this.scene.background = new THREE.Color(theme.fog);
@@ -790,16 +827,16 @@ export class RhythmGame {
     const color = HAND_COLORS[hand];
     const blade = new THREE.Mesh(
       new THREE.CylinderGeometry(0.025, 0.045, 1.25, 18),
-      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2.4, transparent: true, opacity: 0.9 }),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 3.65, transparent: true, opacity: 0.97 }),
     );
     blade.name = `${hand}-blade`;
     blade.position.y = 0.62;
     const aura = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.052, 0.082, 1.31, 16),
+      new THREE.CylinderGeometry(0.064, 0.098, 1.34, 16),
       new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: this.lowPower ? 0.18 : 0.3,
+        opacity: this.lowPower ? 0.36 : 0.5,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         side: THREE.BackSide,
@@ -813,7 +850,7 @@ export class RhythmGame {
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
     );
     core.position.y = 0.64;
-    const light = new THREE.PointLight(color, this.lowPower ? 0.65 : 1.45, 3.2, 1.8);
+    const light = new THREE.PointLight(color, this.lowPower ? 1.8 : 3.8, 4.8, 1.65);
     light.name = `${hand}-blade-light`;
     light.position.y = 0.72;
     const hilt = new THREE.Mesh(
@@ -838,17 +875,17 @@ export class RhythmGame {
       if (blade?.material) {
         blade.material.color.setHex(color);
         blade.material.emissive.setHex(color);
-        blade.material.emissiveIntensity = styleKey === 'ember' ? 3.15 : styleKey === 'prism' ? 2.65 : 2.9;
+        blade.material.emissiveIntensity = styleKey === 'ember' ? 4.2 : styleKey === 'prism' ? 3.45 : 3.8;
         blade.material.opacity = styleKey === 'prism' ? 0.72 : 0.91;
         blade.material.roughness = styleKey === 'ember' ? 0.48 : 0.18;
       }
       if (aura?.material) {
         aura.material.color.setHex(color);
-        aura.material.opacity = this.lowPower ? 0.18 : styleKey === 'prism' ? 0.25 : 0.32;
+        aura.material.opacity = this.lowPower ? 0.25 : styleKey === 'prism' ? 0.34 : 0.44;
       }
       if (light) {
         light.color.setHex(color);
-        light.intensity = this.lowPower ? 0.65 : styleKey === 'ember' ? 1.7 : 1.45;
+        light.intensity = this.lowPower ? 1.05 : styleKey === 'ember' ? 3.15 : 2.8;
       }
     }
     this.damageStyle = styleKey;
@@ -891,35 +928,139 @@ export class RhythmGame {
     this.canvas.addEventListener?.('contextmenu', this._boundContextMenu);
   }
 
-  updateTouchSaber(hand, x, y, active = true) {
-    const side = hand === Hand.RIGHT ? Hand.RIGHT : Hand.LEFT;
-    const state = this.touchSabers[side];
-    const nextX = THREE.MathUtils.clamp(Number(x) || 0, -1, 1);
-    const nextY = THREE.MathUtils.clamp(Number(y) || 0, -1, 1);
-    const dx = nextX - state.x;
-    const dy = nextY - state.y;
-    state.previousX = state.x;
-    state.previousY = state.y;
-    state.x = nextX;
-    state.y = nextY;
-    state.active = Boolean(active);
-
-    const now = this._gameTime();
-    if (state.active && this.phase === GamePhase.PLAYING && Math.hypot(dx, dy) >= 0.11 && now - (state.lastSwing || -1) >= 0.055) {
-      const lane = side === Hand.LEFT ? (nextX < 0 ? -1.5 : -0.5) : (nextX > 0 ? 1.5 : 0.5);
-      const row = nextY >= 0 ? 1 : 0;
-      this._desktopSwing(side, lane, row, vectorToCutDirection(dx, dy));
-      state.lastSwing = now;
+  beginTouchSlice(pointerId, clientX, clientY) {
+    if (this.phase !== GamePhase.PLAYING || this.mode !== GAME_MODES.STANDARD || this.renderer?.xr?.isPresenting) {
+      return { accepted: false, reason: 'inactive' };
     }
-    return { hand: side, x: nextX, y: nextY, active: state.active };
+    if (this.touchSlices.has(pointerId)) return { accepted: false, reason: 'pointer-busy' };
+    const picked = this._pickTouchNote(clientX, clientY);
+    if (!picked?.note) return { accepted: false, reason: picked?.reason || 'no-note' };
+    const gesture = {
+      pointerId,
+      noteId: picked.note.id,
+      startX: Number(clientX) || 0,
+      startY: Number(clientY) || 0,
+      lastX: Number(clientX) || 0,
+      lastY: Number(clientY) || 0,
+      startedAt: globalThis.performance?.now?.() ?? Date.now(),
+    };
+    this.touchSlices.set(pointerId, gesture);
+    const mesh = this.noteMeshes.get(picked.note.id);
+    if (mesh) mesh.userData.touchArmed = true;
+    return { accepted: true, noteId: picked.note.id, hand: picked.note.hand, direction: picked.note.direction };
   }
 
-  updateMobileSaber(hand, x, y, active = true) {
-    return this.updateTouchSaber(hand, x, y, active);
+  updateTouchSlice(pointerId, clientX, clientY) {
+    const gesture = this.touchSlices.get(pointerId);
+    if (!gesture) return { accepted: false, reason: 'no-gesture' };
+    gesture.lastX = Number(clientX) || 0;
+    gesture.lastY = Number(clientY) || 0;
+    const note = this.runtime.active.find((candidate) => candidate.id === gesture.noteId);
+    if (!note) {
+      this.cancelTouchSlice(pointerId);
+      return { accepted: false, reason: 'note-gone' };
+    }
+    const evaluation = evaluateTouchSwipe(note.direction, gesture.startX, gesture.startY, gesture.lastX, gesture.lastY);
+    if (!evaluation.ready) return { accepted: true, pending: true, ...evaluation };
+
+    const elapsed = this._gameTime();
+    const timing = elapsed - note.time;
+    if (Math.abs(timing) > Math.max(this.rules.hitWindow, TOUCH_HIT_WINDOW)) {
+      this.cancelTouchSlice(pointerId);
+      return { accepted: false, reason: timing < 0 ? 'early' : 'late', timing };
+    }
+
+    this._spawnTouchSlash(gesture, note, evaluation.ok);
+    if (!evaluation.ok) {
+      const state = this.score.wrongCut('wrong-direction');
+      this.vrHud?.flashMiss?.('wrong-direction', { redraw: false });
+      this._emit(GameplayEvent.DAMAGE, { reason: 'wrong-direction', source: 'touch-swipe', state });
+      this._flashSaber(note.hand, true);
+      this.cancelTouchSlice(pointerId);
+      if (state.health <= 0) this._finish(true);
+      return { accepted: false, reason: 'wrong-direction', ...evaluation };
+    }
+
+    const judgement = {
+      ok: true,
+      reason: 'touch-swipe',
+      source: 'touch-swipe',
+      timing,
+      distance: 0,
+      alignment: evaluation.alignment,
+      quality: Math.abs(timing) <= 0.035 ? 'perfect' : Math.abs(timing) <= 0.09 ? 'great' : 'good',
+    };
+    this.touchSlices.delete(pointerId);
+    this._hitNote(note, judgement);
+    return { accepted: true, hit: true, noteId: note.id, judgement };
   }
 
-  moveTouchSaber(hand, x, y, active = true) {
-    return this.updateTouchSaber(hand, x, y, active);
+  endTouchSlice(pointerId, clientX, clientY) {
+    const result = this.updateTouchSlice(pointerId, clientX, clientY);
+    if (this.touchSlices.has(pointerId)) this.cancelTouchSlice(pointerId);
+    return result;
+  }
+
+  cancelTouchSlice(pointerId) {
+    const gesture = this.touchSlices.get(pointerId);
+    if (!gesture) return false;
+    const mesh = this.noteMeshes.get(gesture.noteId);
+    if (mesh) mesh.userData.touchArmed = false;
+    this.touchSlices.delete(pointerId);
+    return true;
+  }
+
+  dodge(direction, { source = 'touch' } = {}) {
+    if (this.phase !== GamePhase.PLAYING || this.renderer?.xr?.isPresenting) return { accepted: false, lane: this.dodgeState.lane };
+    const lane = Math.sign(Number(direction) || 0);
+    if (!lane) return { accepted: false, lane: this.dodgeState.lane };
+    const changed = lane !== this.dodgeState.targetLane;
+    this.dodgeState.lane = lane;
+    this.dodgeState.targetLane = lane;
+    if (changed) this._emit(GameplayEvent.DODGE, { accepted: true, lane, direction: lane, source });
+    return { accepted: true, lane, direction: lane, source };
+  }
+
+  _resetDodge() {
+    this.dodgeState.lane = 0;
+    this.dodgeState.targetLane = 0;
+    this.dodgeState.visualX = 0;
+    if (this.player) this.player.position.x = 0;
+    this._emit?.(GameplayEvent.DODGE, { accepted: true, lane: 0, direction: 0, source: 'reset' });
+  }
+
+  _updateDodge() {
+    if (!this.player || this.renderer?.xr?.isPresenting) return;
+    const targetX = this.dodgeState.targetLane * 0.72;
+    const easing = this.reducedMotion ? 1 : 0.24;
+    this.dodgeState.visualX += (targetX - this.dodgeState.visualX) * easing;
+    if (Math.abs(targetX - this.dodgeState.visualX) < 0.002) this.dodgeState.visualX = targetX;
+    this.player.position.x = this.dodgeState.visualX;
+  }
+
+  _pickTouchNote(clientX, clientY) {
+    if (!this.camera || !this.canvas || !this.noteGroup?.children?.length) return { note: null, reason: 'no-note' };
+    const rect = this.canvas.getBoundingClientRect?.() || { left: 0, top: 0, width: 1, height: 1 };
+    this.touchPointer.set(
+      ((Number(clientX) - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      1 - ((Number(clientY) - rect.top) / Math.max(1, rect.height)) * 2,
+    );
+    this.camera.updateMatrixWorld?.(true);
+    this.noteGroup.updateMatrixWorld?.(true);
+    this.touchRaycaster.setFromCamera(this.touchPointer, this.camera);
+    const intersections = this.touchRaycaster.intersectObjects(this.noteGroup.children, true);
+    for (const intersection of intersections) {
+      let object = intersection.object;
+      while (object && object !== this.noteGroup && !object.userData?.noteId) object = object.parent;
+      const noteId = object?.userData?.noteId;
+      if (!noteId) continue;
+      const note = this.runtime.active.find((candidate) => candidate.id === noteId);
+      if (!note) continue;
+      const timing = this._gameTime() - note.time;
+      if (Math.abs(timing) <= Math.max(this.rules.hitWindow, TOUCH_HIT_WINDOW)) return { note, intersection, timing };
+      return { note: null, reason: timing < 0 ? 'early' : 'late', timing };
+    }
+    return { note: null, reason: 'no-note' };
   }
 
   rotateView(deltaX = 0, deltaY = 0) {
@@ -972,6 +1113,7 @@ export class RhythmGame {
   }
 
   _onPointerMove(event) {
+    if (event.pointerType === 'touch') return;
     const rect = this.canvas.getBoundingClientRect?.() || { left: 0, top: 0, width: 1, height: 1 };
     this.desktopPointer.x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     this.desktopPointer.y = 1 - ((event.clientY - rect.top) / Math.max(1, rect.height)) * 2;
@@ -979,12 +1121,21 @@ export class RhythmGame {
   }
 
   _onPointerDown(event) {
+    if (event.pointerType === 'touch') return;
     const hand = event.button === 2 || this.desktopPointer.x > 0 ? Hand.RIGHT : Hand.LEFT;
     this._desktopSwing(hand, this.desktopPointer.x > 0 ? 0.5 : -0.5, this.desktopPointer.y > 0.2 ? 1 : 0, CutDirection.DOWN);
   }
 
   _onKeyDown(event) {
     if (event.repeat) return;
+    if (event.code === 'KeyZ') {
+      this.dodge(-1, { source: 'keyboard' });
+      return;
+    }
+    if (event.code === 'KeyC') {
+      this.dodge(1, { source: 'keyboard' });
+      return;
+    }
     if (event.code === 'Space') {
       if (this.phase === GamePhase.PLAYING) this.pause();
       else if (this.phase === GamePhase.PAUSED) this.resume();
@@ -1031,12 +1182,14 @@ export class RhythmGame {
   _frame() {
     if (this.disposed) return;
     const elapsed = this._gameTime();
+    this._updateDodge(elapsed);
     this._updateDesktopSabers();
     if (this.vrMenu?.visible) this._updateVRMenu();
     if (this.phase === GamePhase.PLAYING) {
       this._updateControllers(elapsed);
-      this._updateBeatmap(elapsed);
-      this._processSweeps(elapsed);
+      this._updateObstacles(elapsed);
+      if (this.phase === GamePhase.PLAYING) this._updateBeatmap(elapsed);
+      if (this.phase === GamePhase.PLAYING) this._processSweeps(elapsed);
       this._emitTick(elapsed);
     }
     this._animateWorld(elapsed);
@@ -1080,11 +1233,8 @@ export class RhythmGame {
     for (const [index, controller] of this.controllers.entries()) {
       const hand = controller.userData.hand || (index === 0 ? Hand.LEFT : Hand.RIGHT);
       const pointerHand = hand === Hand.RIGHT;
-      const touch = this.touchSabers[hand];
-      let x = touch?.active
-        ? (hand === Hand.LEFT ? -0.72 : 0.72) + touch.x * 0.55
-        : pointerHand && this.desktopPointer.active ? 0.62 + this.desktopPointer.x * 0.72 : hand === Hand.LEFT ? -0.62 : 0.62;
-      let y = touch?.active ? 1.12 + touch.y * 0.5 : pointerHand && this.desktopPointer.active ? 1.05 + this.desktopPointer.y * 0.42 : 1.02;
+      let x = pointerHand && this.desktopPointer.active ? 0.62 + this.desktopPointer.x * 0.72 : hand === Hand.LEFT ? -0.62 : 0.62;
+      let y = pointerHand && this.desktopPointer.active ? 1.05 + this.desktopPointer.y * 0.42 : 1.02;
       let autoRotation = null;
       if (this.mode === GAME_MODES.AUTO && this.phase === GamePhase.PLAYING) {
         const target = [...this.runtime.active]
@@ -1098,12 +1248,19 @@ export class RhythmGame {
           autoRotation = directionRotationZ(target.direction) + Math.sin(proximity * Math.PI) * (hand === Hand.LEFT ? -0.32 : 0.32);
         }
       }
+      // WebXR target rays start hidden with matrixAutoUpdate disabled until an
+      // immersive input pose exists. Outside XR these nodes are our visible
+      // stage sabers, so restore normal Three.js transforms explicitly.
+      controller.visible = true;
+      controller.matrixAutoUpdate = true;
       controller.position.set(x, y, -0.22);
       controller.rotation.set(
-        0.58 + (touch?.active ? touch.y * 0.16 : pointerHand ? this.desktopPointer.y * 0.12 : 0),
+        0.58 + (pointerHand ? this.desktopPointer.y * 0.12 : 0),
         0,
         autoRotation ?? (pointerHand ? -0.12 : 0.12),
       );
+      controller.updateMatrix?.();
+      controller.matrixWorldNeedsUpdate = true;
     }
   }
 
@@ -1126,6 +1283,118 @@ export class RhythmGame {
       }
     }
     if (shouldFinishMode({ mode: this.mode, elapsed, trackDuration: this.track?.duration, runtimeComplete: update.complete })) this._finish(false);
+  }
+
+  _updateObstacles(elapsed) {
+    if (this.mode === GAME_MODES.ZEN) return;
+    const incoming = [...this.obstacleRuntime.active]
+      .filter((obstacle) => obstacle.time >= elapsed)
+      .sort((first, second) => first.time - second.time)[0];
+    if (this.mode === GAME_MODES.AUTO && incoming && incoming.time - elapsed <= 0.82) {
+      this.dodge(incoming.safeLane, { source: 'auto' });
+    }
+    const playerLane = this.mode === GAME_MODES.AUTO && incoming?.time - elapsed <= 0.82
+      ? incoming.safeLane
+      : this._currentObstacleLane();
+    const update = this.obstacleRuntime.update(elapsed, playerLane);
+    for (const obstacle of update.spawned) this._spawnObstacleMesh(obstacle);
+    for (const obstacle of update.active) this._updateObstacleMesh(obstacle, elapsed);
+    for (const settlement of update.passed) {
+      this._removeObstacleMesh(settlement.id);
+      this._emit(GameplayEvent.OBSTACLE, { ...settlement, source: this.mode === GAME_MODES.AUTO ? 'auto' : 'player' });
+    }
+    for (const settlement of update.collided) {
+      this._removeObstacleMesh(settlement.id);
+      this._handleObstacleCollision(settlement);
+    }
+  }
+
+  _currentObstacleLane() {
+    if (!this.renderer?.xr?.isPresenting) return this.dodgeState.lane;
+    const xrCamera = this.renderer.xr.getCamera?.(this.camera);
+    if (!xrCamera) return 0;
+    const position = xrCamera.getWorldPosition(new THREE.Vector3());
+    return Math.abs(position.x) >= 0.28 ? Math.sign(position.x) : 0;
+  }
+
+  _spawnObstacleMesh(obstacle) {
+    if (!obstacle || this.obstacleMeshes.has(obstacle.id)) return;
+    const theme = this.activeTheme || THEME_PRESETS.neon;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = style.hurt || theme.bloom;
+    const group = new THREE.Group();
+    group.name = `obstacle-${obstacle.id}`;
+    group.userData.obstacleId = obstacle.id;
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(1.58, 3.05, 0.28),
+      new THREE.MeshPhysicalMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: this.lowPower ? 1.9 : 2.65,
+        roughness: 0.2,
+        metalness: 0.08,
+        transparent: true,
+        opacity: this.lowPower ? 0.46 : 0.5,
+        transmission: this.lowPower ? 0 : 0.12,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    body.name = 'obstacle-wall';
+    body.position.set(obstacle.blockedLane * 1.02, 1.52, 0);
+    const aura = new THREE.Mesh(
+      new THREE.BoxGeometry(1.78, 3.25, 0.38),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: this.lowPower ? 0.24 : 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide, toneMapped: false }),
+    );
+    aura.name = 'obstacle-wall-aura';
+    aura.position.copy(body.position);
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(body.geometry, 18),
+      new THREE.LineBasicMaterial({ color: theme.accent, transparent: true, opacity: 0.98, blending: THREE.AdditiveBlending, toneMapped: false }),
+    );
+    edges.name = 'obstacle-wall-rim';
+    edges.position.copy(body.position);
+    const safeArrow = this._createDirectionArrow(obstacle.safeLane < 0 ? CutDirection.LEFT : CutDirection.RIGHT, true);
+    safeArrow.name = 'obstacle-safe-arrow';
+    safeArrow.position.set(body.position.x, 1.55, 0.18);
+    safeArrow.scale.setScalar(2.25);
+    group.add(aura, body, edges, safeArrow);
+    if (!this.lowPower) {
+      const light = new THREE.PointLight(color, 8.5, 5.4, 1.55);
+      light.name = 'obstacle-warning-light';
+      light.position.set(body.position.x, 1.45, 0.55);
+      group.add(light);
+    }
+    this.obstacleGroup.add(group);
+    this.obstacleMeshes.set(obstacle.id, group);
+    this._updateObstacleMesh(obstacle, this._gameTime());
+  }
+
+  _updateObstacleMesh(obstacle, elapsed) {
+    const mesh = this.obstacleMeshes.get(obstacle.id);
+    if (!mesh) return;
+    const progress = 1 - THREE.MathUtils.clamp((obstacle.time - elapsed) / Math.max(0.01, this.rules.spawnAhead), 0, 1);
+    mesh.position.z = SPAWN_Z + (NOTE_PLANE_Z - SPAWN_Z) * progress;
+    const pulse = 0.5 + 0.5 * Math.sin(elapsed * 11 + obstacle.time);
+    const wall = mesh.getObjectByName('obstacle-wall');
+    const aura = mesh.getObjectByName('obstacle-wall-aura');
+    if (wall?.material) wall.material.emissiveIntensity = (this.lowPower ? 1.7 : 2.2) + progress * 1.35 + pulse * 0.42;
+    if (aura?.material) aura.material.opacity = (this.lowPower ? 0.2 : 0.25) + progress * 0.18 + pulse * 0.06;
+  }
+
+  _handleObstacleCollision(settlement) {
+    const damage = this.score.damage(this.rules.hazardDamage, 'obstacle', true);
+    const state = damage.state;
+    const impact = new THREE.Vector3(settlement.blockedLane * 0.65, 1.3, NOTE_PLANE_Z);
+    this._spawnImpactRing(impact, settlement.blockedLane < 0 ? Hand.LEFT : Hand.RIGHT, true);
+    this._spawnHitEffect(impact, settlement.blockedLane < 0 ? Hand.LEFT : Hand.RIGHT, true);
+    this._flashSaber(Hand.LEFT, true);
+    this._flashSaber(Hand.RIGHT, true);
+    this.vrHud?.flashMiss?.('OBSTACLE', { redraw: false });
+    this.vrHud?.update?.({ time: this._gameTime(), duration: this.track?.duration, state, mode: this.mode, phase: this.phase, title: this.track?.title || this.track?.name }, { force: true });
+    this._emit(GameplayEvent.OBSTACLE, { ...settlement, outcome: 'collided', state });
+    this._emit(GameplayEvent.DAMAGE, { reason: 'obstacle', obstacle: settlement, state });
+    if (state.health <= 0) this._finish(true);
   }
 
   _processSweeps(elapsed) {
@@ -1189,7 +1458,7 @@ export class RhythmGame {
     rim.scale.setScalar(1.018);
     const glow = new THREE.Mesh(
       new THREE.BoxGeometry(0.54, 0.54, 0.35),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: note.accent ? 0.15 : 0.08, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide }),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: note.accent ? 0.25 : 0.14, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide, toneMapped: false }),
     );
     glow.name = 'note-glow';
     const arrow = this._createDirectionArrow(note.direction || CutDirection.ANY, note.accent);
@@ -1257,7 +1526,9 @@ export class RhythmGame {
     mesh.position.set(pos.x, pos.y, pos.z);
     mesh.rotation.set(rotation.x, rotation.y, rotation.z);
     if (!this.reducedMotion) {
-      mesh.scale.setScalar(1 + Math.sin(elapsed * 9 + note.time) * 0.025);
+      mesh.scale.setScalar((mesh.userData.touchArmed ? 1.1 : 1) + Math.sin(elapsed * 9 + note.time) * 0.025);
+    } else {
+      mesh.scale.setScalar(mesh.userData.touchArmed ? 1.08 : 1);
     }
   }
 
@@ -1340,6 +1611,7 @@ export class RhythmGame {
     const beatFraction = beatPhase - Math.floor(beatPhase);
     const beatPulse = Math.exp(-beatFraction * 7.2);
     const barWave = 0.5 + 0.5 * Math.sin((beatPhase / 4) * Math.PI * 2);
+    this.cosmicBackdrop?.update?.(elapsed, beatPulse);
     if (this.worldLights) {
       this.worldLights.leftRim.intensity = 11 + beatPulse * 15 * motionScale;
       this.worldLights.rightRim.intensity = 11 + (beatPulse * 12 + barWave * 3) * motionScale;
@@ -1347,7 +1619,7 @@ export class RhythmGame {
       this.worldLights.key.intensity = 1.7 + beatPulse * 0.9 * motionScale;
     }
     if (this.scene?.fog?.isFogExp2) this.scene.fog.density = 0.032 + (1 - beatPulse) * 0.006;
-    if (this.bloomPass) this.bloomPass.strength = 0.7 + beatPulse * 0.34 * motionScale;
+    if (this.bloomPass) this.bloomPass.strength = 0.86 + beatPulse * 0.5 * motionScale;
     this.environmentGroup.children.forEach((object, index) => {
       const motion = object.userData?.motion;
       const phase = object.userData?.phase || index * 0.31;
@@ -1355,7 +1627,7 @@ export class RhythmGame {
       if (motion === 'equalizer') object.scale.y = 0.72 + (0.28 + Math.sin(elapsed * 5.5 + phase) * 0.18) * motionScale;
       if (motion === 'floorPulse' && object.material) object.material.emissiveIntensity = 0.12 + (0.1 + Math.sin(elapsed * 2.1) * 0.05) * motionScale;
       if (motion === 'skyBreath' && object.material?.color) object.material.color.copy(object.userData.baseColor).lerp(object.userData.pulseColor, (0.08 + beatPulse * 0.1) * motionScale);
-      if (motion === 'laneRail' && object.material) object.material.opacity = 0.26 + beatPulse * 0.4 * motionScale;
+      if (motion === 'laneRail' && object.material) object.material.opacity = 0.38 + beatPulse * 0.5 * motionScale;
       if (motion === 'hitGate') {
         object.scale.x = 1 + beatPulse * 0.07 * motionScale;
         if (object.material) object.material.opacity = 0.42 + beatPulse * 0.48 * motionScale;
@@ -1401,6 +1673,67 @@ export class RhythmGame {
     } catch {
       // Haptics are optional and vary by WebXR runtime.
     }
+  }
+
+  _screenPointToWorld(clientX, clientY, z = NOTE_PLANE_Z + 0.08) {
+    if (!this.camera || !this.canvas) return null;
+    const rect = this.canvas.getBoundingClientRect?.() || { left: 0, top: 0, width: 1, height: 1 };
+    this.touchPointer.set(
+      ((Number(clientX) - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      1 - ((Number(clientY) - rect.top) / Math.max(1, rect.height)) * 2,
+    );
+    this.camera.updateMatrixWorld?.(true);
+    this.touchRaycaster.setFromCamera(this.touchPointer, this.camera);
+    return this.touchRaycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  }
+
+  _spawnTouchSlash(gesture, note, success = true) {
+    if (!this.scene) return;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = success ? (style[note.hand] || HAND_COLORS[note.hand]) : style.hurt;
+    const expected = directionVector(note.direction) || directionVector(vectorToCutDirection(gesture.lastX - gesture.startX, -(gesture.lastY - gesture.startY))) || { x: 0, y: 1 };
+    let start = this._screenPointToWorld(gesture.startX, gesture.startY);
+    let end = this._screenPointToWorld(gesture.lastX, gesture.lastY);
+    const center = new THREE.Vector3(laneToX(note.lane), rowToY(note.row), NOTE_PLANE_Z + 0.1);
+    if (!start) start = center.clone().add(new THREE.Vector3(-expected.x * 0.45, -expected.y * 0.45, 0));
+    if (!end) end = center.clone().add(new THREE.Vector3(expected.x * 0.45, expected.y * 0.45, 0));
+    let delta = end.clone().sub(start);
+    if (delta.length() < 0.32) {
+      start = center.clone().add(new THREE.Vector3(-expected.x * 0.52, -expected.y * 0.52, 0));
+      end = center.clone().add(new THREE.Vector3(expected.x * 0.52, expected.y * 0.52, 0));
+      delta = end.clone().sub(start);
+    }
+    if (delta.length() > 1.7) {
+      delta.setLength(1.7);
+      end = start.clone().add(delta);
+    }
+    const length = delta.length();
+    const midpoint = start.clone().add(end).multiplyScalar(0.5);
+    const orientation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.clone().normalize());
+    const group = new THREE.Group();
+    group.name = success ? 'touch-saber-slash' : 'touch-saber-error';
+    const aura = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.075, 0.075, length, this.lowPower ? 8 : 14, 1, true),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: this.lowPower ? 0.44 : 0.64, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }),
+    );
+    aura.name = 'touch-saber-slash-aura';
+    aura.position.copy(midpoint);
+    aura.quaternion.copy(orientation);
+    const core = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.026, length * 1.02, this.lowPower ? 8 : 12),
+      new THREE.MeshBasicMaterial({ color: success ? 0xffffff : color, transparent: true, opacity: 0.98, depthWrite: false, toneMapped: false }),
+    );
+    core.name = 'touch-saber-slash-core';
+    core.position.copy(midpoint);
+    core.quaternion.copy(orientation);
+    const light = new THREE.PointLight(color, this.lowPower ? 2.2 : 5.4, 4.6, 1.7);
+    light.name = 'touch-saber-slash-light';
+    light.position.copy(midpoint);
+    group.add(aura, core, light);
+    const now = performance.now() / 1000;
+    group.userData = { born: now, last: now, kind: 'touch-slash', lifetime: this.reducedMotion ? 0.18 : success ? 0.38 : 0.3 };
+    this.scene.add(group);
+    this.damageEffects.push(group);
   }
 
   _spawnHitEffect(base, hand, accent = false) {
@@ -1564,6 +1897,15 @@ export class RhythmGame {
         if (age >= lifetime) this._removeDamageEffect(effect);
         continue;
       }
+      if (effect.userData.kind === 'touch-slash') {
+        for (const object of effect.children) {
+          if (object.material) object.material.opacity = Math.max(0, (object.name.includes('aura') ? 0.64 : 0.98) * (1 - progress));
+          if (object.isPointLight) object.intensity = Math.max(0, object.intensity * (1 - delta * 8));
+        }
+        effect.scale.setScalar(1 + progress * 0.14);
+        if (age >= lifetime) this._removeDamageEffect(effect);
+        continue;
+      }
       const positions = effect.geometry.attributes.position;
       for (let index = 0; index < effect.userData.velocities.length; index += 1) {
         const velocity = effect.userData.velocities[index];
@@ -1647,8 +1989,25 @@ export class RhythmGame {
   }
 
   _clearNotes() {
+    this.touchSlices.clear();
     for (const id of [...this.noteMeshes.keys()]) this._removeNoteMesh(id);
     clearGroup(this.noteGroup);
+  }
+
+  _removeObstacleMesh(obstacleId) {
+    const mesh = this.obstacleMeshes.get(obstacleId);
+    if (!mesh) return;
+    this.obstacleGroup.remove(mesh);
+    mesh.traverse((object) => {
+      object.geometry?.dispose?.();
+      disposeMaterial(object.material);
+    });
+    this.obstacleMeshes.delete(obstacleId);
+  }
+
+  _clearObstacles() {
+    for (const id of [...this.obstacleMeshes.keys()]) this._removeObstacleMesh(id);
+    clearGroup(this.obstacleGroup);
   }
 }
 
@@ -1737,6 +2096,29 @@ export function vectorToCutDirection(x, y) {
     '-2': CutDirection.DOWN,
     '-1': CutDirection.DOWN_RIGHT,
   })[octant] || CutDirection.UP;
+}
+
+export function evaluateTouchSwipe(direction, startX, startY, endX, endY, { minDistance = 28, minAlignment = 0.58 } = {}) {
+  const dx = (Number(endX) || 0) - (Number(startX) || 0);
+  // Screen-space Y grows downwards while beatmap directions grow upwards.
+  const dy = -((Number(endY) || 0) - (Number(startY) || 0));
+  const distance = Math.hypot(dx, dy);
+  if (distance < Math.max(8, Number(minDistance) || 28)) {
+    return { ready: false, ok: false, reason: 'too-short', distance, alignment: 0, direction: vectorToCutDirection(dx, dy) };
+  }
+  const actualDirection = vectorToCutDirection(dx, dy);
+  if (direction === CutDirection.ANY) return { ready: true, ok: true, reason: 'match', distance, alignment: 1, direction: actualDirection };
+  const expected = directionVector(direction);
+  if (!expected) return { ready: true, ok: false, reason: 'invalid-direction', distance, alignment: 0, direction: actualDirection };
+  const alignment = (dx * expected.x + dy * expected.y) / Math.max(0.0001, distance);
+  return {
+    ready: true,
+    ok: alignment >= THREE.MathUtils.clamp(Number(minAlignment) || 0.58, 0, 1),
+    reason: alignment >= THREE.MathUtils.clamp(Number(minAlignment) || 0.58, 0, 1) ? 'match' : 'wrong-direction',
+    distance,
+    alignment,
+    direction: actualDirection,
+  };
 }
 
 export function autoPerfectJudgement() {

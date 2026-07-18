@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TRACKS, createBeatmap } from '../data/tracks.js';
-import { MUSIC_MASTERING, MUSIC_PROFILE_RECIPES, ProceduralMusic } from './ProceduralMusic.js';
+import { MUSIC_MASTERING, MUSIC_PROFILE_RECIPES, ProceduralMusic, clampAudibleFrequency } from './ProceduralMusic.js';
 
 class FakeParam {
   constructor(value = 0) {
@@ -213,6 +213,12 @@ describe('ProceduralMusic fallback transport', () => {
 });
 
 describe('ProceduralMusic Web Audio scheduling', () => {
+  it('clamps every generated partial below the context Nyquist limit', () => {
+    expect(clampAudibleFrequency(112640, 48000)).toBe(20000);
+    expect(clampAudibleFrequency(28160, 8000)).toBe(3999);
+    expect(clampAudibleFrequency(-1, 48000)).toBe(20);
+  });
+
   it('keeps pre-master gain conservative before compression and brickwall limiting', () => {
     const maximumIntensityFactor = MUSIC_MASTERING.intensityFloor + 1.5 * MUSIC_MASTERING.intensityScale;
     expect(MUSIC_MASTERING.synthBaseGain * maximumIntensityFactor).toBeLessThan(0.25);

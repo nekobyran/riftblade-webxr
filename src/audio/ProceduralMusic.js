@@ -129,22 +129,29 @@ const midiForNote = (noteName, octave) => {
   return (octave + 1) * 12 + semitones[match[1]] + accidental;
 };
 
+export function clampAudibleFrequency(value, sampleRate = 48000) {
+  const nyquist = Math.max(1000, (Number(sampleRate) || 48000) * 0.5 - 1);
+  return Math.min(20000, nyquist, Math.max(20, Number(value) || 440));
+}
+
+const DEFAULT_SCALE = Object.freeze(['A', 'B', 'C#', 'D', 'E', 'F#', 'G#']);
+
 const frequencyForDegree = (track, degree, octave) => {
-  const scale = track?.music?.scale?.length ? track.music.scale : ['A'];
+  const scale = track?.music?.scale?.length ? track.music.scale : DEFAULT_SCALE;
   const normalized = Math.round(degree);
   const wrapped = ((normalized % scale.length) + scale.length) % scale.length;
   const octaveShift = Math.floor(normalized / scale.length);
   const midi = midiForNote(scale[wrapped], octave + octaveShift);
-  return 440 * 2 ** ((midi - 69) / 12);
+  return clampAudibleFrequency(440 * 2 ** ((midi - 69) / 12));
 };
 
 const frequencyFor = (track, note) => {
-  const scale = track?.music?.scale?.length ? track.music.scale : ['A'];
+  const scale = track?.music?.scale?.length ? track.music.scale : DEFAULT_SCALE;
   const lead = track?.music?.instruments?.lead ?? {};
   const octave = Number.isFinite(lead.octave) ? lead.octave : 4;
   const degree = Math.abs(Math.round(note.row * 2 + (note.lane + 1.5))) % scale.length;
   const midi = midiForNote(scale[degree], octave + (note.accent ? 1 : 0));
-  return 440 * 2 ** ((midi - 69) / 12);
+  return clampAudibleFrequency(440 * 2 ** ((midi - 69) / 12));
 };
 
 function safeCall(target, method, ...args) {
@@ -541,8 +548,9 @@ export class ProceduralMusic {
 
     oscillator.type = ['sine', 'triangle', 'sawtooth', 'square'].includes(wave) ? wave : 'sine';
     if (oscillator.frequency) {
-      if (typeof oscillator.frequency.setValueAtTime === 'function') oscillator.frequency.setValueAtTime(frequency, when);
-      else oscillator.frequency.value = frequency;
+      const audibleFrequency = clampAudibleFrequency(frequency, this.context?.sampleRate);
+      if (typeof oscillator.frequency.setValueAtTime === 'function') oscillator.frequency.setValueAtTime(audibleFrequency, when);
+      else oscillator.frequency.value = audibleFrequency;
     }
 
     if (filter) {
@@ -610,7 +618,7 @@ export class ProceduralMusic {
     const filter = safeCall(this.context, 'createBiquadFilter');
     if (!oscillator || !gainNode) return;
     oscillator.type = type;
-    oscillator.frequency?.setValueAtTime?.(frequency, when);
+    oscillator.frequency?.setValueAtTime?.(clampAudibleFrequency(frequency, this.context?.sampleRate), when);
     if (filter) {
       filter.type = 'lowpass';
       filter.frequency?.setValueAtTime?.(cutoff, when);
@@ -641,7 +649,7 @@ export class ProceduralMusic {
       const oscillator = safeCall(this.context, 'createOscillator');
       if (!oscillator) return;
       oscillator.type = type;
-      oscillator.frequency?.setValueAtTime?.(frequency, when);
+      oscillator.frequency?.setValueAtTime?.(clampAudibleFrequency(frequency, this.context?.sampleRate), when);
       if (oscillator.detune) oscillator.detune.value = (index - 1) * 5;
       safeCall(oscillator, 'connect', bus);
       this._startNode(oscillator, when, when + duration + 0.03);
@@ -679,8 +687,8 @@ export class ProceduralMusic {
     const gainNode = safeCall(this.context, 'createGain');
     if (!oscillator || !gainNode) return;
     oscillator.type = 'sine';
-    oscillator.frequency?.setValueAtTime?.(frequency * 1.75, when);
-    oscillator.frequency?.exponentialRampToValueAtTime?.(frequency, when + 0.055);
+    oscillator.frequency?.setValueAtTime?.(clampAudibleFrequency(frequency * 1.75, this.context?.sampleRate), when);
+    oscillator.frequency?.exponentialRampToValueAtTime?.(clampAudibleFrequency(frequency, this.context?.sampleRate), when + 0.055);
     gainNode.gain?.setValueAtTime?.(Math.max(0.0001, level), when);
     gainNode.gain?.exponentialRampToValueAtTime?.(0.0001, when + 0.11);
     safeCall(oscillator, 'connect', gainNode);
@@ -694,7 +702,7 @@ export class ProceduralMusic {
       const gainNode = safeCall(this.context, 'createGain');
       if (!oscillator || !gainNode) return;
       oscillator.type = index === 0 ? 'sine' : 'triangle';
-      oscillator.frequency?.setValueAtTime?.(frequency * ratio, when);
+      oscillator.frequency?.setValueAtTime?.(clampAudibleFrequency(frequency * ratio, this.context?.sampleRate), when);
       const partialLevel = Math.max(0.0001, level / (1 + index * 1.8));
       gainNode.gain?.setValueAtTime?.(partialLevel, when);
       gainNode.gain?.exponentialRampToValueAtTime?.(0.0001, when + 0.48 + index * 0.12);

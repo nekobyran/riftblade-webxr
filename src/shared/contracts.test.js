@@ -19,5 +19,7 @@ describe('shared gameplay contracts', () => {
     expect(GameplayEvent.MODE_CHANGE).toBe('game:mode-change');
     expect(GameplayEvent.TRACK_SELECT).toBe('game:track-select');
     expect(GameplayEvent.CUSTOM_TRACK).toBe('game:custom-track');
+    expect(GameplayEvent.DODGE).toBe('game:get-dodge');
+    expect(GameplayEvent.OBSTACLE).toBe('game:obstacle');
   });
 });

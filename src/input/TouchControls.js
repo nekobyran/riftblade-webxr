@@ -1,286 +1,302 @@
-import { Hand } from '../shared/contracts.js';
-
 export const TouchInputEvent = Object.freeze({
-  SABER: 'input:touch-saber',
-  LOOK: 'input:look',
+  SLICE: 'input:touch-slice',
+  DODGE: 'input:dodge',
   PAUSE: 'input:pause',
 });
 
+const DODGE_STATE_EVENT = 'game:get-dodge';
+const LOCAL_DODGE_FEEDBACK_MS = 320;
+const SLICE_RELEASE_FEEDBACK_MS = 220;
+
 /**
- * Mobile-only dual saber sticks and a separate drag-to-look surface.
- * The class calls optional RhythmGame methods and always mirrors input as DOM events,
- * so the renderer can integrate without coupling the controls to Three.js.
+ * Mobile controls intentionally leave the play field unobstructed: pointers are
+ * captured directly on the renderer canvas and forwarded to RhythmGame's
+ * note-raycast slice API. Only pause and obstacle-dodge actions occupy UI space.
  */
 export class TouchControls {
   constructor({ game = null, eventTarget = null, parent = null, onPause = null } = {}) {
     this.game = game;
     this.eventTarget = eventTarget ?? new EventTarget();
-    // Keep an explicit mount when supplied. Otherwise resolve the dedicated
-    // shell lazily in initialize(), so scripts loaded before <body> still work.
     this.parent = parent;
     this.onPause = onPause;
+    this.canvas = game?.canvas ?? null;
     this.root = null;
     this.active = false;
     this.paused = false;
+    this.activeSlices = new Map();
+    this.dodgeLane = 0;
+    this.dodgeFeedbackTimer = null;
+    this.sliceFeedbackTimer = null;
     this.abortController = new AbortController();
-    this.sticks = new Map([
-      [Hand.LEFT, createStickState(Hand.LEFT)],
-      [Hand.RIGHT, createStickState(Hand.RIGHT)],
-    ]);
-    this.look = { pointerId: null, x: 0, y: 0 };
 
-    this.handlePointerDown = this.handlePointerDown.bind(this);
-    this.handlePointerMove = this.handlePointerMove.bind(this);
-    this.handlePointerEnd = this.handlePointerEnd.bind(this);
-    this.handleKeyDown = this.handleKeyDown.bind(this);
-    this.handleKeyUp = this.handleKeyUp.bind(this);
+    this.handleCanvasPointerDown = this.handleCanvasPointerDown.bind(this);
+    this.handleCanvasPointerMove = this.handleCanvasPointerMove.bind(this);
+    this.handleCanvasPointerEnd = this.handleCanvasPointerEnd.bind(this);
+    this.handleCanvasPointerCancel = this.handleCanvasPointerCancel.bind(this);
+    this.handleControlPointerDown = this.handleControlPointerDown.bind(this);
+    this.handleControlPointerEnd = this.handleControlPointerEnd.bind(this);
     this.handleClick = this.handleClick.bind(this);
+    this.handleDodgeState = this.handleDodgeState.bind(this);
   }
 
   initialize() {
     if (this.root) return this.root;
     this.parent = resolveTouchMount(this.parent);
     if (!this.parent) return null;
+    this.canvas = this.canvas
+      ?? this.game?.canvas
+      ?? globalThis.document?.querySelector?.('#game-canvas')
+      ?? null;
+
     const root = document.createElement('section');
     root.id = 'touch-control-deck';
     root.className = 'touch-controls';
-    root.setAttribute('aria-label', '手机双剑控制器');
+    root.dataset.dodgeLane = 'center';
+    root.setAttribute('aria-label', '手机划击与障碍躲避控制');
     root.setAttribute('aria-hidden', 'true');
     root.innerHTML = `
-      <button class="touch-pause" type="button" data-touch-action="pause" aria-label="暂停游戏">Ⅱ</button>
-      <div class="touch-look-zone" data-touch-look tabindex="0" role="application" aria-label="转视角区域，拖动以转向">
-        <span aria-hidden="true"><i></i>拖动转视角</span>
+      <p class="sr-only">触摸画面中的音符，再沿箭头方向滑动以切击。障碍来临时使用左躲或右躲按钮。</p>
+      <button class="touch-pause" type="button" data-touch-action="pause" aria-label="暂停游戏" disabled>Ⅱ</button>
+      <div class="touch-slice-instruction" aria-hidden="true">
+        <i></i><span>按住音符 · 沿箭头划击</span>
       </div>
-      ${renderStick(Hand.LEFT, '左剑', 'L')}
-      ${renderStick(Hand.RIGHT, '右剑', 'R')}`;
+      <div class="touch-dodge-rail" role="group" aria-label="障碍躲避">
+        ${renderDodgeButton(-1, '左躲', '‹')}
+        ${renderDodgeButton(1, '右躲', '›')}
+      </div>`;
+    this.parent.setAttribute?.('aria-label', '移动端划击与躲避控制');
     this.parent.append(root);
     this.root = root;
 
     const { signal } = this.abortController;
-    root.addEventListener('pointerdown', this.handlePointerDown, { signal });
-    root.addEventListener('pointermove', this.handlePointerMove, { signal });
-    root.addEventListener('pointerup', this.handlePointerEnd, { signal });
-    root.addEventListener('pointercancel', this.handlePointerEnd, { signal });
-    root.addEventListener('lostpointercapture', this.handlePointerEnd, { signal });
-    root.addEventListener('keydown', this.handleKeyDown, { signal });
-    root.addEventListener('keyup', this.handleKeyUp, { signal });
+    root.addEventListener('pointerdown', this.handleControlPointerDown, { signal });
+    root.addEventListener('pointerup', this.handleControlPointerEnd, { signal });
+    root.addEventListener('pointercancel', this.handleControlPointerEnd, { signal });
+    root.addEventListener('lostpointercapture', this.handleControlPointerEnd, { signal });
     root.addEventListener('click', this.handleClick, { signal });
+
+    // Capture-phase canvas listeners run before RhythmGame's desktop pointer
+    // controls, preventing one touch from being interpreted as both a tap and a
+    // directional mobile slice.
+    const canvasOptions = { signal, capture: true, passive: false };
+    this.canvas?.addEventListener?.('pointerdown', this.handleCanvasPointerDown, canvasOptions);
+    this.canvas?.addEventListener?.('pointermove', this.handleCanvasPointerMove, canvasOptions);
+    this.canvas?.addEventListener?.('pointerup', this.handleCanvasPointerEnd, canvasOptions);
+    this.canvas?.addEventListener?.('pointercancel', this.handleCanvasPointerCancel, canvasOptions);
+    this.canvas?.addEventListener?.('lostpointercapture', this.handleCanvasPointerCancel, { signal, capture: true });
+    this.eventTarget?.addEventListener?.(DODGE_STATE_EVENT, this.handleDodgeState, { signal });
+
+    this.syncControlState();
     return root;
   }
 
   dispose() {
+    this.cancelAllSlices();
     this.abortController.abort();
-    for (const hand of this.sticks.keys()) this.releaseStick(hand);
+    clearTimeout(this.dodgeFeedbackTimer);
+    clearTimeout(this.sliceFeedbackTimer);
+    this.dodgeFeedbackTimer = null;
+    this.sliceFeedbackTimer = null;
     this.root?.remove();
     this.root = null;
   }
 
   setActive(active) {
     this.active = Boolean(active);
+    if (!this.active) {
+      this.cancelAllSlices();
+      this.setDodgeLane(0);
+    }
     if (!this.root) return;
     this.root.classList.toggle('is-active', this.active);
     this.root.setAttribute('aria-hidden', String(!this.active));
-    this.root.querySelectorAll('button, [tabindex]').forEach((control) => {
-      if ('disabled' in control) control.disabled = !this.active;
-      if (control.hasAttribute('tabindex')) control.tabIndex = this.active ? 0 : -1;
-    });
-    if (!this.active) {
-      for (const hand of this.sticks.keys()) this.releaseStick(hand);
-      this.look.pointerId = null;
-    }
+    this.syncControlState();
   }
 
   setPaused(paused) {
     this.paused = Boolean(paused);
+    if (this.paused) this.cancelAllSlices();
     const button = this.root?.querySelector('[data-touch-action="pause"]');
     if (button) {
       button.textContent = this.paused ? '▶' : 'Ⅱ';
       button.setAttribute('aria-label', this.paused ? '继续游戏' : '暂停游戏');
     }
+    this.root?.classList.toggle('is-paused', this.paused);
+    this.syncControlState();
   }
 
-  handlePointerDown(event) {
-    if (!this.active) return;
-    const pad = event.target.closest('[data-touch-stick]');
-    if (pad) {
-      const hand = pad.dataset.touchStick;
-      const state = this.sticks.get(hand);
-      if (!state || state.pointerId !== null) return;
-      event.preventDefault();
-      pad.setPointerCapture?.(event.pointerId);
-      state.pointerId = event.pointerId;
-      state.lastAt = event.timeStamp;
-      state.lastX = event.clientX;
-      state.lastY = event.clientY;
-      this.updateStickFromPointer(hand, pad, event);
-      return;
-    }
-
-    const lookZone = event.target.closest('[data-touch-look]');
-    if (lookZone && this.look.pointerId === null) {
-      event.preventDefault();
-      lookZone.setPointerCapture?.(event.pointerId);
-      this.look = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-      lookZone.classList.add('is-dragging');
-    }
+  syncControlState() {
+    this.root?.querySelectorAll('button').forEach((button) => {
+      const pauseButton = button.dataset.touchAction === 'pause';
+      button.disabled = !this.active || (!pauseButton && this.paused);
+    });
   }
 
-  handlePointerMove(event) {
-    if (!this.active) return;
-    for (const [hand, state] of this.sticks) {
-      if (state.pointerId === event.pointerId) {
-        event.preventDefault();
-        const pad = this.root?.querySelector(`[data-touch-stick="${hand}"]`);
-        if (pad) this.updateStickFromPointer(hand, pad, event);
-        return;
+  handleCanvasPointerDown(event) {
+    if (!this.active || this.paused || !isSlicePointer(event) || this.activeSlices.has(event.pointerId)) return;
+    consumePointerEvent(event);
+    this.canvas?.setPointerCapture?.(event.pointerId);
+    const point = pointerPoint(event);
+    this.activeSlices.set(event.pointerId, point);
+    this.paintSliceFeedback(point, true);
+    const result = this.game?.beginTouchSlice?.(event.pointerId, point.x, point.y);
+    this.emit(TouchInputEvent.SLICE, {
+      phase: 'start', pointerId: event.pointerId, clientX: point.x, clientY: point.y, pointerType: event.pointerType, result,
+    });
+  }
+
+  handleCanvasPointerMove(event) {
+    if (!this.activeSlices.has(event.pointerId)) return;
+    consumePointerEvent(event);
+    const point = pointerPoint(event);
+    this.activeSlices.set(event.pointerId, point);
+    this.paintSliceFeedback(point, true);
+    const result = this.game?.updateTouchSlice?.(event.pointerId, point.x, point.y);
+    this.emit(TouchInputEvent.SLICE, {
+      phase: 'move', pointerId: event.pointerId, clientX: point.x, clientY: point.y, pointerType: event.pointerType, result,
+    });
+  }
+
+  handleCanvasPointerEnd(event) {
+    if (!this.activeSlices.has(event.pointerId)) return;
+    consumePointerEvent(event);
+    const point = pointerPoint(event, this.activeSlices.get(event.pointerId));
+    this.activeSlices.delete(event.pointerId);
+    const result = this.game?.endTouchSlice?.(event.pointerId, point.x, point.y);
+    this.releaseCanvasPointer(event.pointerId);
+    this.paintSliceFeedback(point, false);
+    this.emit(TouchInputEvent.SLICE, {
+      phase: 'end', pointerId: event.pointerId, clientX: point.x, clientY: point.y, pointerType: event.pointerType, result,
+    });
+  }
+
+  handleCanvasPointerCancel(event) {
+    if (!this.activeSlices.has(event.pointerId)) return;
+    consumePointerEvent(event);
+    const point = pointerPoint(event, this.activeSlices.get(event.pointerId));
+    this.activeSlices.delete(event.pointerId);
+    const result = this.game?.cancelTouchSlice?.(event.pointerId);
+    this.releaseCanvasPointer(event.pointerId);
+    this.paintSliceFeedback(point, false);
+    this.emit(TouchInputEvent.SLICE, {
+      phase: 'cancel', pointerId: event.pointerId, clientX: point.x, clientY: point.y, pointerType: event.pointerType, result,
+    });
+  }
+
+  cancelAllSlices() {
+    for (const pointerId of this.activeSlices.keys()) {
+      this.game?.cancelTouchSlice?.(pointerId);
+      this.releaseCanvasPointer(pointerId);
+    }
+    this.activeSlices.clear();
+    this.root?.classList.remove('is-slicing', 'just-sliced');
+  }
+
+  releaseCanvasPointer(pointerId) {
+    try {
+      if (!this.canvas?.hasPointerCapture || this.canvas.hasPointerCapture(pointerId)) {
+        this.canvas?.releasePointerCapture?.(pointerId);
       }
-    }
-
-    if (this.look.pointerId === event.pointerId) {
-      event.preventDefault();
-      const zone = this.root?.querySelector('[data-touch-look]');
-      const rect = zone?.getBoundingClientRect() ?? { width: innerWidth, height: innerHeight };
-      const deltaX = event.clientX - this.look.x;
-      const deltaY = event.clientY - this.look.y;
-      this.look.x = event.clientX;
-      this.look.y = event.clientY;
-      const normalized = normalizeLookDelta(deltaX, deltaY, rect.width, rect.height);
-      this.emitLook({ ...normalized, deltaX, deltaY, pointerType: event.pointerType });
+    } catch {
+      // A browser may release capture before dispatching lostpointercapture.
     }
   }
 
-  handlePointerEnd(event) {
-    for (const [hand, state] of this.sticks) {
-      if (state.pointerId === event.pointerId) {
-        event.preventDefault();
-        this.releaseStick(hand);
-        return;
-      }
-    }
-    if (this.look.pointerId === event.pointerId) {
-      this.look.pointerId = null;
-      this.root?.querySelector('[data-touch-look]')?.classList.remove('is-dragging');
+  paintSliceFeedback(point, slicing) {
+    if (!this.root) return;
+    clearTimeout(this.sliceFeedbackTimer);
+    this.root.style.setProperty('--slice-x', `${point.x}px`);
+    this.root.style.setProperty('--slice-y', `${point.y}px`);
+    this.root.classList.toggle('is-slicing', slicing || this.activeSlices.size > 0);
+    this.root.classList.remove('just-sliced');
+    if (!slicing && this.activeSlices.size === 0) {
+      // Force a fresh pulse even when several cuts finish in quick succession.
+      void this.root.offsetWidth;
+      this.root.classList.add('just-sliced');
+      this.sliceFeedbackTimer = setTimeout(() => this.root?.classList.remove('just-sliced'), SLICE_RELEASE_FEEDBACK_MS);
     }
   }
 
-  handleKeyDown(event) {
-    const pad = event.target.closest('[data-touch-stick]');
-    if (!pad || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(event.key)) return;
-    event.preventDefault();
-    const hand = pad.dataset.touchStick;
-    const state = this.sticks.get(hand);
-    if (!state) return;
-    const increment = 0.42;
-    if (event.key === 'ArrowLeft') state.x = Math.max(-1, state.x - increment);
-    if (event.key === 'ArrowRight') state.x = Math.min(1, state.x + increment);
-    if (event.key === 'ArrowUp') state.y = Math.min(1, state.y + increment);
-    if (event.key === 'ArrowDown') state.y = Math.max(-1, state.y - increment);
-    if (event.key === ' ') state.y = state.y >= 0 ? -1 : 1;
-    this.paintStick(hand);
-    this.emitSaber(hand, { x: state.x, y: state.y, active: true, velocity: 1, source: 'keyboard' });
+  handleControlPointerDown(event) {
+    if (!this.active || this.paused) return;
+    const button = event.target.closest?.('[data-touch-dodge]');
+    if (!button) return;
+    button.setPointerCapture?.(event.pointerId);
+    button.dataset.pressPointer = String(event.pointerId);
+    button.classList.add('is-pressed');
   }
 
-  handleKeyUp(event) {
-    const pad = event.target.closest('[data-touch-stick]');
-    if (!pad || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(event.key)) return;
-    event.preventDefault();
-    this.releaseStick(pad.dataset.touchStick);
+  handleControlPointerEnd(event) {
+    const button = event.target.closest?.('[data-touch-dodge]');
+    if (!button || button.dataset.pressPointer !== String(event.pointerId)) return;
+    button.classList.remove('is-pressed');
+    delete button.dataset.pressPointer;
   }
 
   handleClick(event) {
-    if (!event.target.closest('[data-touch-action="pause"]') || !this.active) return;
-    this.emit(TouchInputEvent.PAUSE, { paused: this.paused });
-    if (typeof this.onPause === 'function') this.onPause();
-    else if (this.paused) this.game?.resume?.();
-    else this.game?.pause?.();
+    const pauseButton = event.target.closest?.('[data-touch-action="pause"]');
+    if (pauseButton && this.active) {
+      this.emit(TouchInputEvent.PAUSE, { paused: this.paused });
+      if (typeof this.onPause === 'function') this.onPause();
+      else if (this.paused) this.game?.resume?.();
+      else this.game?.pause?.();
+      return;
+    }
+
+    const dodgeButton = event.target.closest?.('[data-touch-dodge]');
+    if (!dodgeButton || !this.active || this.paused) return;
+    const direction = normalizeDodgeLane(dodgeButton.dataset.touchDodge);
+    if (direction === 0) return;
+    this.setDodgeLane(direction, { temporary: true });
+    const result = this.game?.dodge?.(direction);
+    const resultLane = readDodgeLane(result);
+    if (resultLane !== null) this.setDodgeLane(resultLane);
+    this.emit(TouchInputEvent.DODGE, { direction, lane: resultLane ?? direction, result });
   }
 
-  updateStickFromPointer(hand, pad, event) {
-    const state = this.sticks.get(hand);
-    if (!state) return;
-    const rect = pad.getBoundingClientRect();
-    const point = normalizeStickPosition(event.clientX, event.clientY, rect);
-    const elapsed = Math.max(8, event.timeStamp - state.lastAt);
-    const distance = Math.hypot(event.clientX - state.lastX, event.clientY - state.lastY);
-    const velocity = Math.min(4, distance / elapsed / 0.65);
-    Object.assign(state, {
-      x: point.x,
-      y: point.y,
-      lastAt: event.timeStamp,
-      lastX: event.clientX,
-      lastY: event.clientY,
-    });
-    this.paintStick(hand);
-    this.emitSaber(hand, { x: point.x, y: point.y, active: true, velocity, source: 'pointer' });
+  handleDodgeState(event) {
+    const lane = readDodgeLane(event?.detail);
+    if (lane !== null) this.setDodgeLane(lane);
   }
 
-  paintStick(hand) {
-    const state = this.sticks.get(hand);
-    const pad = this.root?.querySelector(`[data-touch-stick="${hand}"]`);
-    const knob = pad?.querySelector('.joystick-knob');
-    if (!state || !pad || !knob) return;
-    knob.style.setProperty('--stick-x', `${state.x * 42}%`);
-    knob.style.setProperty('--stick-y', `${state.y * -42}%`);
-    pad.classList.toggle('is-engaged', Math.abs(state.x) + Math.abs(state.y) > 0.02);
-    pad.setAttribute('aria-valuetext', `横向 ${Math.round(state.x * 100)}，纵向 ${Math.round(state.y * 100)}`);
-  }
-
-  releaseStick(hand) {
-    const state = this.sticks.get(hand);
-    if (!state) return;
-    const wasActive = state.pointerId !== null || Math.abs(state.x) + Math.abs(state.y) > 0;
-    Object.assign(state, { pointerId: null, x: 0, y: 0, lastAt: 0, lastX: 0, lastY: 0 });
-    this.paintStick(hand);
-    if (wasActive) this.emitSaber(hand, { x: 0, y: 0, active: false, velocity: 0, source: 'release' });
-  }
-
-  emitSaber(hand, detail) {
-    const payload = { hand, ...detail };
-    this.game?.updateTouchSaber?.(hand, payload.x, payload.y, payload.active, payload.velocity);
-    this.emit(TouchInputEvent.SABER, payload);
-  }
-
-  emitLook(detail) {
-    // RhythmGame consumes screen-space pixel deltas and applies its own
-    // sensitivity. The mirrored DOM event keeps normalized yaw/pitch so other
-    // renderers and accessibility tooling can consume device-independent data.
-    this.game?.rotateView?.(detail.deltaX, detail.deltaY);
-    this.emit(TouchInputEvent.LOOK, detail);
+  setDodgeLane(lane, { temporary = false } = {}) {
+    const normalized = normalizeDodgeLane(lane);
+    this.dodgeLane = normalized;
+    clearTimeout(this.dodgeFeedbackTimer);
+    this.dodgeFeedbackTimer = null;
+    if (this.root) {
+      this.root.dataset.dodgeLane = normalized < 0 ? 'left' : normalized > 0 ? 'right' : 'center';
+      this.root.querySelectorAll('[data-touch-dodge]').forEach((button) => {
+        const selected = normalizeDodgeLane(button.dataset.touchDodge) === normalized && normalized !== 0;
+        button.classList.toggle('is-current', selected);
+        button.setAttribute('aria-pressed', String(selected));
+      });
+    }
+    if (temporary && normalized !== 0) {
+      this.dodgeFeedbackTimer = setTimeout(() => this.setDodgeLane(0), LOCAL_DODGE_FEEDBACK_MS);
+    }
+    return normalized;
   }
 
   emit(type, detail) {
-    this.eventTarget.dispatchEvent(createCustomEvent(type, detail));
+    this.eventTarget?.dispatchEvent?.(createCustomEvent(type, detail));
     this.root?.dispatchEvent(createCustomEvent(type, detail));
   }
 }
 
-export function normalizeStickPosition(clientX, clientY, rect) {
-  const width = Math.max(1, Number(rect?.width) || 1);
-  const height = Math.max(1, Number(rect?.height) || 1);
-  const centerX = (Number(rect?.left) || 0) + width / 2;
-  const centerY = (Number(rect?.top) || 0) + height / 2;
-  const radius = Math.max(1, Math.min(width, height) * 0.36);
-  let x = (Number(clientX) - centerX) / radius;
-  let y = (centerY - Number(clientY)) / radius;
-  const length = Math.hypot(x, y);
-  if (length > 1) {
-    x /= length;
-    y /= length;
+export function normalizeDodgeLane(value, fallback = 0) {
+  const candidate = typeof value === 'object' && value !== null
+    ? (value.lane ?? value.direction)
+    : value;
+  if (typeof candidate === 'string') {
+    const label = candidate.trim().toLowerCase();
+    if (['left', '左', '-1'].includes(label)) return -1;
+    if (['right', '右', '+1', '1'].includes(label)) return 1;
+    if (['center', 'centre', '中', '0'].includes(label)) return 0;
   }
-  return { x: cleanZero(x), y: cleanZero(y), magnitude: Math.min(1, length) };
-}
-
-export function normalizeLookDelta(deltaX, deltaY, width, height) {
-  const safeWidth = Math.max(1, Number(width) || 1);
-  const safeHeight = Math.max(1, Number(height) || 1);
-  const x = clamp(Number(deltaX) / safeWidth, -1, 1);
-  const y = clamp(Number(deltaY) / safeHeight, -1, 1);
-  return {
-    x,
-    y,
-    yaw: x * -2.4,
-    pitch: y * -1.8,
-  };
+  const numeric = Number(candidate);
+  if (Number.isFinite(numeric)) return Math.sign(numeric);
+  return Math.sign(Number(fallback) || 0);
 }
 
 export function resolveTouchMount(parent = null, documentRef = globalThis.document) {
@@ -290,19 +306,37 @@ export function resolveTouchMount(parent = null, documentRef = globalThis.docume
     ?? null;
 }
 
-function renderStick(hand, label, shortLabel) {
+function renderDodgeButton(direction, label, arrow) {
   return `
-    <div class="touch-stick-wrap" data-hand="${hand}">
-      <span>${label}</span>
-      <div class="joystick-pad" data-touch-stick="${hand}" tabindex="-1" role="slider" aria-label="${label}虚拟摇杆" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0" aria-valuetext="居中">
-        <i class="joystick-ring" aria-hidden="true"></i>
-        <b class="joystick-knob" aria-hidden="true">${shortLabel}</b>
-      </div>
-    </div>`;
+    <button class="touch-dodge-button" type="button" data-touch-dodge="${direction}" aria-label="${label}障碍" aria-pressed="false" disabled>
+      <span aria-hidden="true">${arrow}</span><b>${label}</b>
+    </button>`;
 }
 
-function createStickState(hand) {
-  return { hand, pointerId: null, x: 0, y: 0, lastAt: 0, lastX: 0, lastY: 0 };
+function readDodgeLane(value) {
+  const candidate = typeof value === 'object' && value !== null
+    ? (value.lane ?? value.direction)
+    : value;
+  if (candidate === undefined || candidate === null || candidate === '' || typeof candidate === 'boolean') return null;
+  return normalizeDodgeLane(candidate);
+}
+
+function pointerPoint(event, fallback = { x: 0, y: 0 }) {
+  const x = Number(event?.clientX);
+  const y = Number(event?.clientY);
+  return {
+    x: Number.isFinite(x) ? x : fallback.x,
+    y: Number.isFinite(y) ? y : fallback.y,
+  };
+}
+
+function isSlicePointer(event) {
+  return event?.pointerType !== 'mouse' || event.button === 0;
+}
+
+function consumePointerEvent(event) {
+  event.preventDefault?.();
+  event.stopImmediatePropagation?.();
 }
 
 function createCustomEvent(type, detail) {
@@ -311,6 +345,3 @@ function createCustomEvent(type, detail) {
   Object.defineProperty(event, 'detail', { value: detail });
   return event;
 }
-
-function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
-function cleanZero(value) { return Math.abs(value) < 1e-9 ? 0 : value; }

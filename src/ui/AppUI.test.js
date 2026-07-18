@@ -31,4 +31,19 @@ describe('AppUI track localization', () => {
     expect(ui.trackTitle(track)).toBe('霓虹演示');
     expect(ui.renderTrackRow(track, true, 0)).toContain('Neon Demo · synthwave');
   });
+
+  it('renders gameplay score as one fixed numeric output without competitive card clutter', () => {
+    const track = { id: 'demo', title: 'Demo', duration: 60 };
+    const ui = new AppUI({ root: null, tracks: [track] });
+    ui.state.phase = 'playing';
+    ui.state.hud.score = 12840;
+
+    const markup = ui.renderHud(track);
+
+    expect(markup).toContain('class="hud-total-score"');
+    expect(markup).toContain('>12,840</output>');
+    expect(markup).not.toContain('hud-stats');
+    expect(markup).not.toContain('progress-meter');
+    expect(markup).not.toContain('<span>分数</span>');
+  });
 });

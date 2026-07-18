@@ -1,6 +1,6 @@
 # RIFT//BLADE 2.0 光痕裂界
 
-一款完全原创、无需后端的 **Three.js + WebXR** 双剑节奏游戏。十首程序化原创曲、十套实时动态世界、固定八向切割箭头、自动与纯享模式，以及本地歌曲自动谱面都在浏览器端完成；上传的音乐不会离开设备。
+一款完全原创、无需后端的 **Three.js + WebXR** 双剑节奏游戏。十首程序化原创曲、十套实时动态世界、程序化 3D 宇宙星空、固定八向切割箭头、节拍障碍、自动与纯享模式，以及本地歌曲自动谱面都在浏览器端完成；上传的音乐不会离开设备。
 
 在线游玩：<https://nekobyran.github.io/riftblade-webxr/>
 
@@ -44,8 +44,8 @@
 
 ### 手机/平板
 
-- 左、右两个虚拟摇杆分别控制两把光刃。
-- 在视角触控区拖动以转向，使用独立暂停按钮控制游戏。
+- 直接按住画面中抵达近身区的音符，沿正面箭头方向划动；有效切击会留下对应主题色的三维光剑斩痕。
+- 遇到发光障碍墙时点击“左躲”或“右躲”切换安全侧；顶部只固定显示纯数字总分，暂停使用独立按钮。
 - 支持横竖屏、安全区与触控降级画质。
 
 ## 上传自己的歌曲
@@ -70,6 +70,6 @@ pwsh -NoProfile -File .\command\Invoke-WebXR.ps1 -Action Dev -Port 4273
 
 ## 技术
 
-Three.js · WebXR · Web Audio API · EffectComposer / UnrealBloomPass · CanvasTexture · Vite · Vitest
+Three.js · WebXR · Web Audio API · 程序化 3D 星空 · EffectComposer / UnrealBloomPass · CanvasTexture · Vite · Vitest
 
 > 这是原创作品，与 Beat Games、Beat Saber 或任何商业音乐版权方无关联。玩法语义参考公开的节奏切割交互，但没有复制商标、音乐、模型或美术资源。

@@ -7,8 +7,10 @@ import {
   LANE_WORLD_SCALE,
   NOTE_PLANE_Z,
   NOTE_ROW_COUNT,
+  ObstacleRuntime,
   ScoreKeeper,
   createDesktopSweep,
+  createObstacleMap,
   judgeCut,
   laneToX,
   multiplierForCombo,
@@ -158,5 +160,112 @@ describe('BeatmapRuntime', () => {
 
     expect(update.missed.map((n) => n.id)).toEqual(['a', 'b']);
     expect(update.complete).toBe(true);
+  });
+});
+
+describe('createObstacleMap', () => {
+  it('generates a deterministic, safe and reasonably spaced map from track metadata', () => {
+    const track = { id: 'cosmic-drive', bpm: 128, duration: 80 };
+    const first = createObstacleMap(track);
+    const second = createObstacleMap({ ...track });
+
+    expect(first).toEqual(second);
+    expect(first.length).toBeGreaterThanOrEqual(6);
+    expect(first.length).toBeLessThanOrEqual(12);
+    expect(new Set(first.map((obstacle) => obstacle.id)).size).toBe(first.length);
+    expect(new Set(first.map((obstacle) => obstacle.time)).size).toBe(first.length);
+    for (const obstacle of first) {
+      expect(obstacle.time).toBeGreaterThanOrEqual(5);
+      expect(obstacle.time).toBeLessThanOrEqual(track.duration - 2.5);
+      expect([-1, 1]).toContain(obstacle.blockedLane);
+      expect(obstacle.safeLane).toBe(-obstacle.blockedLane);
+      expect(typeof obstacle.accent).toBe('boolean');
+    }
+    expect(first.map((obstacle) => obstacle.time)).toEqual([...first].sort((a, b) => a.time - b.time).map((obstacle) => obstacle.time));
+  });
+
+  it('uses the track id as part of the deterministic arrangement seed', () => {
+    const first = createObstacleMap({ id: 'alpha', bpm: 120, duration: 64 });
+    const second = createObstacleMap({ id: 'beta', bpm: 120, duration: 64 });
+
+    expect(second).not.toEqual(first);
+  });
+
+  it('prefers and normalizes authored obstacles without mutating the source', () => {
+    const obstacles = [
+      { id: 'wall', time: 4, blockedLane: 1, safeLane: 1, accent: 1 },
+      { id: 'wall', time: 9, blockedLane: -1 },
+      { id: 'same-time-is-unsafe', time: 9, blockedLane: 1 },
+      { id: 'outside-track', time: 25, blockedLane: 1 },
+    ];
+    const snapshot = structuredClone(obstacles);
+
+    expect(createObstacleMap({ id: 'authored', bpm: 120, duration: 20, obstacles })).toEqual([
+      { id: 'wall', time: 4, blockedLane: 1, safeLane: -1, accent: true },
+      { id: 'wall-2', time: 9, blockedLane: -1, safeLane: 1, accent: false },
+    ]);
+    expect(obstacles).toEqual(snapshot);
+    expect(createObstacleMap({ id: 'no-walls', bpm: 120, duration: 80, obstacles: [] })).toEqual([]);
+  });
+
+  it('returns no generated obstacles when metadata is invalid or the song is too short', () => {
+    expect(createObstacleMap({ id: 'missing-duration', bpm: 120 })).toEqual([]);
+    expect(createObstacleMap({ id: 'tutorial-only', bpm: 60, duration: 12 })).toEqual([]);
+  });
+});
+
+describe('ObstacleRuntime', () => {
+  const obstacles = [
+    { id: 'left-safe', time: 5, blockedLane: 1, safeLane: -1, accent: false },
+    { id: 'right-safe', time: 8, blockedLane: -1, safeLane: 1, accent: true },
+  ];
+
+  it('spawns ahead, then settles a safe dodge and a collision exactly once', () => {
+    const runtime = new ObstacleRuntime(obstacles, { spawnAhead: 2 });
+
+    expect(runtime.update(2.999, -1).spawned).toEqual([]);
+    expect(runtime.update(3, -1).spawned.map((obstacle) => obstacle.id)).toEqual(['left-safe']);
+    expect(runtime.update(4.999, -1).active.map((obstacle) => obstacle.id)).toEqual(['left-safe']);
+
+    const firstSettlement = runtime.update(5, -1);
+    expect(firstSettlement.passed.map((obstacle) => obstacle.id)).toEqual(['left-safe']);
+    expect(firstSettlement.collided).toEqual([]);
+
+    expect(runtime.update(6, -1).spawned.map((obstacle) => obstacle.id)).toEqual(['right-safe']);
+    const secondSettlement = runtime.update(8, -1);
+    expect(secondSettlement.collided.map((obstacle) => obstacle.id)).toEqual(['right-safe']);
+    expect(secondSettlement.collided[0]).toMatchObject({ playerLane: -1, outcome: 'collided', resolvedAt: 8 });
+    expect(secondSettlement.passed).toEqual([]);
+    expect(secondSettlement.active).toEqual([]);
+    expect(secondSettlement.complete).toBe(true);
+
+    const repeated = runtime.update(9, 1);
+    expect(repeated.collided).toEqual([]);
+    expect(repeated.passed).toEqual([]);
+    expect(repeated.complete).toBe(true);
+  });
+
+  it('allows explicit resolution and reset without double settlement', () => {
+    const runtime = new ObstacleRuntime(obstacles, { spawnAhead: 10 });
+    runtime.update(0, 0);
+
+    expect(runtime.resolve('left-safe', -1, 4.8)).toMatchObject({ id: 'left-safe', outcome: 'passed', resolvedAt: 4.8 });
+    expect(runtime.resolve('left-safe', 1, 5)).toBeNull();
+    expect(runtime.isComplete()).toBe(false);
+    expect(runtime.resolve('right-safe', 1)).toMatchObject({ id: 'right-safe', outcome: 'passed', resolvedAt: 8 });
+    expect(runtime.isComplete()).toBe(true);
+
+    runtime.reset();
+    expect(runtime.isComplete()).toBe(false);
+    expect(runtime.update(0, 0).active.map((obstacle) => obstacle.id)).toEqual(['left-safe', 'right-safe']);
+  });
+
+  it('normalizes player positions to left/right sides and handles empty maps', () => {
+    const runtime = new ObstacleRuntime([obstacles[0]], 0);
+    const result = runtime.update(5, -1.5);
+
+    expect(result.passed).toHaveLength(1);
+    expect(result.passed[0].playerLane).toBe(-1);
+    expect(new ObstacleRuntime([]).isComplete()).toBe(true);
   });
 });

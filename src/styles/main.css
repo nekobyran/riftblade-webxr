@@ -1456,7 +1456,7 @@ a:focus-visible {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.26) !important;
 }
 
-/* Mobile controls live outside #app so AppUI redraws cannot interrupt a drag. */
+/* Mobile controls live outside #app so AppUI redraws cannot interrupt a cut. */
 .touch-controls {
   position: absolute;
   inset: 0;
@@ -1466,178 +1466,168 @@ a:focus-visible {
   -webkit-user-select: none;
 }
 
-.touch-pause {
-  position: absolute;
-  top: max(14px, env(safe-area-inset-top));
-  left: 50%;
-  z-index: 4;
+.touch-controls::after {
+  position: fixed;
+  top: var(--slice-y, -100px);
+  left: var(--slice-x, -100px);
+  z-index: 2;
+  width: 46px;
+  height: 46px;
+  pointer-events: none;
+  content: "";
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.74) 0 7%, rgba(121, 232, 255, 0.2) 18%, transparent 62%);
+  border: 1px solid rgba(174, 242, 255, 0.64);
+  border-radius: 50%;
+  opacity: 0;
+  box-shadow: 0 0 20px rgba(121, 232, 255, 0.34), inset 0 0 14px rgba(121, 232, 255, 0.22);
+  transform: translate(-50%, -50%) scale(0.72);
+  transition: opacity 90ms linear, transform 90ms var(--ease-standard);
+}
+
+.touch-controls.is-slicing::after {
+  opacity: 0.92;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.touch-controls.just-sliced::after {
+  animation: touch-slice-release 220ms var(--ease-standard);
+}
+
+.touch-pause,
+.touch-dodge-button {
   display: grid;
-  width: 48px;
-  height: 48px;
   place-items: center;
   padding: 0;
-  color: var(--text);
-  font-weight: 800;
-  background: rgba(16, 21, 33, 0.78);
-  border: 1px solid var(--outline-strong);
-  border-radius: 16px;
-  box-shadow: var(--shadow-1);
-  transform: translateX(-50%);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-}
-
-.touch-look-zone {
-  position: absolute;
-  top: 19%;
-  right: 25%;
-  bottom: 22%;
-  left: 25%;
-  z-index: 1;
-  display: grid;
-  min-width: var(--touch-target);
-  min-height: var(--touch-target);
-  place-items: start center;
-  padding-top: 12px;
-  overflow: hidden;
   pointer-events: auto;
-  touch-action: none;
-  border: 1px solid transparent;
-  border-radius: 28px;
+  touch-action: manipulation;
+  color: var(--text);
+  background: linear-gradient(150deg, rgba(28, 36, 54, 0.84), rgba(9, 13, 23, 0.7));
+  border: 1px solid var(--outline-strong);
+  box-shadow: var(--shadow-1), inset 0 1px rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
 }
 
-.touch-look-zone > span {
-  display: grid;
-  gap: 7px;
-  place-items: center;
-  color: rgba(244, 246, 255, 0.46);
+.touch-pause {
+  position: absolute;
+  top: max(86px, calc(env(safe-area-inset-top) + 76px));
+  right: max(16px, env(safe-area-inset-right));
+  left: auto;
+  z-index: 4;
+  width: 48px;
+  height: 48px;
+  font-weight: 800;
+  border-radius: 16px;
+  transform: none;
+}
+
+.touch-slice-instruction {
+  position: absolute;
+  right: max(112px, calc(env(safe-area-inset-right) + 96px));
+  bottom: max(30px, calc(env(safe-area-inset-bottom) + 20px));
+  left: max(112px, calc(env(safe-area-inset-left) + 96px));
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  color: rgba(244, 246, 255, 0.64);
   font-size: 0.64rem;
-  font-weight: 680;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 6px 10px;
-  background: rgba(7, 10, 22, 0.36);
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  background: rgba(7, 10, 22, 0.44);
+  border: 1px solid rgba(224, 233, 255, 0.12);
   border-radius: 999px;
-  opacity: 0.42;
-  transition: opacity 160ms var(--ease-standard);
+  opacity: 0.74;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: opacity 160ms var(--ease-standard), transform 160ms var(--ease-standard);
 }
 
-.touch-look-zone i {
-  width: 34px;
-  height: 18px;
-  border: 1px solid rgba(244, 246, 255, 0.3);
-  border-top: 0;
-  border-radius: 0 0 22px 22px;
+.touch-slice-instruction i {
+  width: 22px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--track-primary));
+  border-radius: 999px;
+  box-shadow: 7px 0 12px color-mix(in srgb, var(--track-primary) 46%, transparent);
+  transform: rotate(-36deg);
 }
 
-.touch-look-zone.is-dragging {
-  background: radial-gradient(circle, rgba(121, 232, 255, 0.08), transparent 70%);
-  border-color: rgba(121, 232, 255, 0.16);
+.touch-controls.is-slicing .touch-slice-instruction {
+  opacity: 0.26;
+  transform: translateY(4px);
 }
 
-.touch-look-zone.is-dragging > span {
-  opacity: 0.25;
-}
-
-.touch-stick-wrap {
+.touch-dodge-rail {
   position: absolute;
   bottom: max(18px, env(safe-area-inset-bottom));
-  z-index: 3;
-  display: grid;
-  gap: 7px;
-  justify-items: center;
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 4;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
   pointer-events: none;
 }
 
-.touch-stick-wrap[data-hand="left"] {
-  left: max(18px, env(safe-area-inset-left));
+.touch-dodge-button {
+  position: relative;
+  grid-template-columns: auto auto;
+  min-width: 104px;
+  min-height: 64px;
+  gap: 8px;
+  border-radius: 20px;
+  transition: transform 130ms var(--ease-standard), border-color 130ms linear, box-shadow 130ms linear, background 130ms linear;
 }
 
-.touch-stick-wrap[data-hand="right"] {
-  right: max(18px, env(safe-area-inset-right));
+.touch-dodge-button span {
+  color: var(--track-primary);
+  font-size: 2rem;
+  font-weight: 580;
+  line-height: 0.8;
+  text-shadow: 0 0 14px color-mix(in srgb, var(--track-primary) 54%, transparent);
 }
 
-.touch-stick-wrap > span {
-  color: rgba(244, 246, 255, 0.62);
-  font-size: 0.64rem;
-  font-weight: 720;
+.touch-dodge-button b {
+  font-size: 0.78rem;
+  font-weight: 820;
   letter-spacing: 0.08em;
 }
 
-.joystick-pad {
-  position: relative;
-  display: grid;
-  width: clamp(98px, 24vw, 132px);
-  height: clamp(98px, 24vw, 132px);
-  place-items: center;
-  pointer-events: auto;
-  touch-action: none;
-  background:
-    radial-gradient(circle, rgba(255, 255, 255, 0.075) 0 35%, transparent 36%),
-    rgba(10, 14, 23, 0.52);
-  border: 1px solid rgba(224, 233, 255, 0.22);
-  border-radius: 50%;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32), inset 0 0 24px rgba(255, 255, 255, 0.025);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+.touch-dodge-button[data-touch-dodge="1"] span {
+  color: var(--track-secondary);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--track-secondary) 54%, transparent);
 }
 
-.joystick-ring {
-  position: absolute;
-  inset: 18%;
-  border: 1px solid rgba(224, 233, 255, 0.13);
-  border-radius: 50%;
+.touch-dodge-button.is-pressed,
+.touch-dodge-button:active {
+  transform: scale(0.94);
 }
 
-.joystick-ring::before,
-.joystick-ring::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  content: "";
-  background: rgba(224, 233, 255, 0.12);
-  transform: translate(-50%, -50%);
+.touch-dodge-button.is-current {
+  background: linear-gradient(150deg, color-mix(in srgb, var(--track-primary) 26%, rgba(19, 28, 44, 0.92)), rgba(8, 14, 25, 0.84));
+  border-color: color-mix(in srgb, var(--track-primary) 72%, white 8%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--track-primary) 18%, transparent), 0 0 28px color-mix(in srgb, var(--track-primary) 34%, transparent);
+  transform: translateY(-4px);
 }
 
-.joystick-ring::before {
-  width: 100%;
-  height: 1px;
+.touch-dodge-button[data-touch-dodge="1"].is-current {
+  background: linear-gradient(150deg, color-mix(in srgb, var(--track-secondary) 26%, rgba(19, 28, 44, 0.92)), rgba(8, 14, 25, 0.84));
+  border-color: color-mix(in srgb, var(--track-secondary) 72%, white 8%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--track-secondary) 18%, transparent), 0 0 28px color-mix(in srgb, var(--track-secondary) 34%, transparent);
 }
 
-.joystick-ring::after {
-  width: 1px;
-  height: 100%;
+.touch-dodge-button.is-current.is-pressed {
+  transform: translateY(-4px) scale(0.94);
 }
 
-.joystick-knob {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  width: 46%;
-  height: 46%;
-  place-items: center;
-  color: #081016;
-  font-size: 0.76rem;
-  font-weight: 900;
-  background: var(--track-primary);
-  border: 2px solid rgba(255, 255, 255, 0.54);
-  border-radius: 50%;
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--track-primary) 27%, transparent);
-  transform: translate(var(--stick-x, 0%), var(--stick-y, 0%));
-  transition: transform 70ms linear;
-}
-
-.touch-stick-wrap[data-hand="right"] .joystick-knob {
-  background: var(--track-secondary);
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--track-secondary) 27%, transparent);
-}
-
-.joystick-pad.is-engaged {
-  border-color: color-mix(in srgb, var(--track-primary) 48%, transparent);
-}
-
-.joystick-pad.is-engaged .joystick-knob {
-  transition: none;
+.touch-pause:disabled,
+.touch-dodge-button:disabled {
+  pointer-events: none;
+  opacity: 0.4;
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -1648,7 +1638,8 @@ a:focus-visible {
   .now-playing,
   .icon-button,
   .touch-pause,
-  .joystick-pad {
+  .touch-dodge-button,
+  .touch-slice-instruction {
     background-color: rgba(16, 21, 33, 0.96);
   }
 }
@@ -1941,13 +1932,25 @@ a:focus-visible {
     display: none;
   }
 
-  .joystick-pad {
-    width: 94px;
-    height: 94px;
+  .touch-dodge-button {
+    min-width: 92px;
+    min-height: 60px;
   }
 
-  .touch-stick-wrap {
+  .touch-dodge-rail {
     bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .touch-slice-instruction {
+    right: max(108px, calc(env(safe-area-inset-right) + 98px));
+    bottom: max(84px, calc(env(safe-area-inset-bottom) + 76px));
+    left: max(108px, calc(env(safe-area-inset-left) + 98px));
+    min-height: 30px;
+    padding-inline: 6px;
+  }
+
+  .touch-slice-instruction span {
+    display: none;
   }
 }
 
@@ -2002,28 +2005,30 @@ a:focus-visible {
     display: none;
   }
 
-  .touch-look-zone {
-    top: 14%;
-    bottom: 10%;
+  .touch-dodge-rail {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
   }
 
-  .touch-stick-wrap {
+  .touch-dodge-button {
+    min-width: 82px;
+    min-height: 56px;
+    border-radius: 18px;
+  }
+
+  .touch-slice-instruction {
+    right: max(100px, calc(env(safe-area-inset-right) + 90px));
     bottom: max(8px, env(safe-area-inset-bottom));
-  }
-
-  .joystick-pad {
-    width: min(25vh, 112px);
-    height: min(25vh, 112px);
-  }
-
-  .touch-stick-wrap > span {
-    display: none;
+    left: max(100px, calc(env(safe-area-inset-left) + 90px));
+    min-height: 30px;
   }
 
   .touch-pause {
-    top: max(8px, env(safe-area-inset-top));
-    width: 44px;
-    height: 44px;
+    top: max(70px, calc(env(safe-area-inset-top) + 62px));
+    right: max(12px, env(safe-area-inset-right));
+    width: 48px;
+    height: 48px;
   }
 }
 
@@ -2045,12 +2050,13 @@ a:focus-visible {
   .icon-button,
   .track-row,
   .mode-segment,
-  .joystick-pad {
+  .touch-dodge-button {
     border: 1px solid CanvasText;
   }
 
   .track-row.is-selected,
-  .mode-segment button[aria-pressed="true"] {
+  .mode-segment button[aria-pressed="true"],
+  .touch-dodge-button.is-current {
     color: HighlightText;
     background: Highlight;
   }
@@ -2064,7 +2070,8 @@ a:focus-visible {
   .now-playing,
   .icon-button,
   .touch-pause,
-  .joystick-pad {
+  .touch-dodge-button,
+  .touch-slice-instruction {
     background: var(--surface-strong);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -2079,6 +2086,18 @@ a:focus-visible {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes touch-slice-release {
+  from {
+    opacity: 0.92;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.75);
   }
 }
 
@@ -2157,5 +2176,95 @@ a:focus-visible {
   100% {
     opacity: 0;
     transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* Gameplay deliberately exposes one datum only: the cumulative score. */
+.hud-panel.hud-score-only {
+  position: fixed;
+  top: max(14px, calc(env(safe-area-inset-top) + 10px));
+  right: auto;
+  left: 50%;
+  z-index: 18;
+  display: none;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  pointer-events: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transform: translateX(-50%);
+}
+
+.hud-panel.hud-score-only.is-live {
+  display: block;
+  animation: none;
+}
+
+.hud-total-score {
+  display: block;
+  color: #fff;
+  font-family: Inter, "Segoe UI Variable Display", system-ui, sans-serif;
+  font-size: clamp(2.2rem, 5vw, 4.35rem);
+  font-weight: 860;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.065em;
+  line-height: 0.92;
+  text-align: center;
+  text-shadow:
+    0 0 8px rgba(255, 255, 255, 0.92),
+    0 0 22px color-mix(in srgb, var(--track-primary) 76%, transparent),
+    0 0 46px color-mix(in srgb, var(--track-secondary) 58%, transparent);
+}
+
+.hud-pause-floating {
+  position: fixed;
+  top: max(92px, calc(env(safe-area-inset-top) + 82px));
+  right: max(18px, env(safe-area-inset-right));
+  z-index: 18;
+  display: none;
+  width: 52px;
+  min-height: 52px;
+  padding: 0;
+  color: #fff;
+  background: rgba(6, 12, 25, 0.68);
+  border: 1px solid color-mix(in srgb, var(--track-primary) 48%, rgba(255, 255, 255, 0.22));
+  border-radius: 18px;
+  box-shadow: 0 0 26px color-mix(in srgb, var(--track-primary) 24%, transparent);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+}
+
+.hud-pause-floating.is-live {
+  display: grid;
+  place-items: center;
+}
+
+.damage-banner.damage-banner-floating {
+  position: fixed;
+  top: max(82px, calc(env(safe-area-inset-top) + 76px));
+  right: auto;
+  left: 50%;
+  z-index: 19;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  transform: translateX(-50%);
+}
+
+@media (pointer: coarse), (max-width: 820px) {
+  .hud-panel.hud-score-only {
+    top: max(10px, calc(env(safe-area-inset-top) + 7px));
+  }
+
+  .hud-total-score {
+    font-size: clamp(2rem, 11vw, 3.1rem);
+  }
+
+  .hud-pause-floating {
+    display: none !important;
   }
 }
