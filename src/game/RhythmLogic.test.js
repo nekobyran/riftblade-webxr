@@ -3,6 +3,10 @@ import { CutDirection, GamePhase, Hand } from '../shared/contracts.js';
 import {
   BeatmapRuntime,
   DEFAULT_RULES,
+  LANES,
+  LANE_WORLD_SCALE,
+  NOTE_PLANE_Z,
+  NOTE_ROW_COUNT,
   ScoreKeeper,
   createDesktopSweep,
   judgeCut,
@@ -69,6 +73,23 @@ describe('RhythmLogic sweep judgement', () => {
   });
 });
 
+describe('ergonomic four-lane, two-row play field', () => {
+  it('keeps all four authored lanes inside a natural two-arm span', () => {
+    expect(LANES).toHaveLength(4);
+    expect(LANE_WORLD_SCALE).toBeLessThan(0.7);
+    expect(LANES.map((lane) => Number(laneToX(lane).toFixed(2)))).toEqual([-0.93, -0.31, 0.31, 0.93]);
+    expect(Math.max(...LANES.map((lane) => Math.abs(laneToX(lane))))).toBeLessThan(1);
+  });
+
+  it('uses exactly two readable height rows and a near-body hit plane', () => {
+    expect(NOTE_ROW_COUNT).toBe(2);
+    expect(rowToY(1)).toBeGreaterThan(rowToY(0));
+    expect(rowToY(2)).toBe(rowToY(1));
+    expect(NOTE_PLANE_Z).toBeLessThanOrEqual(-0.6);
+    expect(NOTE_PLANE_Z).toBeGreaterThanOrEqual(-1);
+  });
+});
+
 describe('ScoreKeeper', () => {
   it('tracks combo thresholds, multiplier, score, health and results', () => {
     const score = new ScoreKeeper();
@@ -101,6 +122,15 @@ describe('ScoreKeeper', () => {
     expect(score.snapshot().health).toBe(0);
     expect(score.snapshot().phase).toBe(GamePhase.RESULTS);
     expect(score.results(1).grade).toBe('F');
+  });
+
+  it('preserves a zero-based start timestamp across pause and resume', () => {
+    const score = new ScoreKeeper();
+    score.setPhase(GamePhase.PLAYING, 0);
+    score.setPhase(GamePhase.PAUSED, 12);
+    score.setPhase(GamePhase.PLAYING, 15);
+
+    expect(score.snapshot().startedAt).toBe(0);
   });
 });
 

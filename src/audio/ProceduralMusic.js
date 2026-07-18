@@ -3,7 +3,118 @@ import { createBeatmap } from '../data/tracks.js';
 const DEFAULT_LOOKAHEAD_SECONDS = 0.22;
 const DEFAULT_TICK_MS = 60;
 
+const deepFreeze = (value) => {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  Object.values(value).forEach(deepFreeze);
+  return value;
+};
+
+/**
+ * Ten deliberately different arrangements. Every recipe has a drum pocket,
+ * bass phrase, chord pad, and authored lead motif; the chart is therefore free
+ * to stay gameplay data instead of becoming a second, duplicated synth layer.
+ */
+export const MUSIC_PROFILE_RECIPES = deepFreeze({
+  'neon-liquid': {
+    kicks: [0, 4, 8, 12], snares: [4, 12], hats: [1, 3, 5, 7, 9, 11, 13, 15],
+    bass: [0, 3, 8, 11], bassDegrees: [0, 2, 3, 4], bassOctave: 2, bassWave: 'triangle', bassCutoff: 920,
+    padEvery: 64, padDegrees: [0, 2, 4], padDuration: 3.5, padWave: 'sine',
+    melody: [0, 2, 5, 7, 10, 13, 15], melodyDegrees: [0, 2, 4, 3, 2, 4, 1], melodySteps: 1.45, melodyLevel: 0.055,
+  },
+  'forge-ritual': {
+    kicks: [0, 6, 10], snares: [8], hats: [3, 7, 11, 15],
+    bass: [0, 8], bassDegrees: [0, 1, 5, 0], bassOctave: 1, bassWave: 'sawtooth', bassCutoff: 420, bassDuration: 0.46,
+    padEvery: 32, padDegrees: [0, 2, 4], padDuration: 2.6, padWave: 'triangle',
+    melody: [0, 6, 8, 14], melodyDegrees: [0, 1, 3, 5], melodySteps: 2.4, melodyLevel: 0.05,
+    special: { type: 'metal', steps: [12], level: 0.12 },
+  },
+  'orbit-breaks': {
+    kicks: [0, 6, 10], snares: [4, 12], hats: [1, 3, 5, 7, 9, 11, 13, 15],
+    bass: [0, 4, 8, 12], bassDegrees: [0, 4, 2, 5], bassOctave: 2, bassWave: 'square', bassCutoff: 760,
+    padEvery: 64, padDegrees: [0, 2, 4], padDuration: 3.8, padWave: 'sine',
+    melody: [0, 3, 5, 7, 9, 11, 14], melodyDegrees: [0, 4, 2, 6, 5, 3, 1], melodySteps: 1.2, melodyLevel: 0.047,
+    special: { type: 'tabla', steps: [2, 5, 11, 14], level: 0.07 },
+  },
+  'sakura-garage': {
+    kicks: [0, 7, 10], snares: [4, 12], hats: [2, 5, 7, 10, 13, 15],
+    bass: [0, 6, 10, 14], bassDegrees: [0, 3, 1, 4], bassOctave: 2, bassWave: 'sine', bassCutoff: 680, bassDuration: 0.3,
+    padEvery: 32, padDegrees: [0, 2, 4, 1], padDuration: 2.9, padWave: 'sawtooth',
+    melody: [0, 3, 6, 10, 13], melodyDegrees: [0, 2, 4, 3, 1], melodySteps: 1.75, melodyLevel: 0.052,
+    special: { type: 'wood', steps: [3, 11], level: 0.055 },
+  },
+  'abyss-neuro': {
+    kicks: [0, 3, 10], snares: [4, 12], hats: [1, 2, 5, 7, 9, 11, 13, 14, 15],
+    bass: [0, 2, 6, 9, 11, 14], bassDegrees: [0, 0, 5, 2, 6, 1], bassOctave: 1, bassWave: 'sawtooth', bassCutoff: 540, bassDuration: 0.14,
+    padEvery: 64, padDegrees: [0, 2, 5], padDuration: 2.7, padWave: 'sine',
+    melody: [0, 2, 7, 9, 11, 14], melodyDegrees: [0, 6, 4, 1, 5, 2], melodySteps: 0.9, melodyLevel: 0.038,
+    special: { type: 'sonar', steps: [7, 15], level: 0.045 },
+  },
+  'solar-house': {
+    kicks: [0, 4, 8, 12], snares: [4, 12], hats: [2, 6, 10, 14], openHats: [6, 14],
+    bass: [2, 6, 10, 14], bassDegrees: [0, 4, 5, 3], bassOctave: 2, bassWave: 'square', bassCutoff: 830, bassDuration: 0.24,
+    padEvery: 32, padDegrees: [0, 2, 4, 6], padDuration: 3.4, padWave: 'sawtooth',
+    melody: [0, 2, 4, 7, 8, 10, 12, 14], melodyDegrees: [0, 2, 4, 6, 5, 4, 2, 1], melodySteps: 1.6, melodyLevel: 0.056,
+  },
+  'cryo-trip': {
+    kicks: [0, 10], snares: [8], hats: [3, 7, 11, 15],
+    bass: [0, 7, 12], bassDegrees: [0, 3, 5], bassOctave: 1, bassWave: 'triangle', bassCutoff: 520, bassDuration: 0.52,
+    padEvery: 32, padDegrees: [0, 2, 4, 6], padDuration: 5.2, padWave: 'sine',
+    melody: [0, 6, 10, 14], melodyDegrees: [0, 4, 2, 5], melodySteps: 3.2, melodyLevel: 0.042,
+    special: { type: 'ice', steps: [6, 14], level: 0.035 },
+  },
+  'jade-organic': {
+    kicks: [0, 5, 10, 14], snares: [4, 12], hats: [2, 6, 9, 13, 15],
+    bass: [0, 3, 7, 10, 13], bassDegrees: [0, 4, 2, 5, 3], bassOctave: 2, bassWave: 'sine', bassCutoff: 740, bassDuration: 0.28,
+    padEvery: 48, padDegrees: [0, 2, 4], padDuration: 3.6, padWave: 'triangle',
+    melody: [0, 3, 5, 8, 11, 13, 15], melodyDegrees: [0, 4, 2, 5, 3, 1, 4], melodySteps: 1.35, melodyLevel: 0.05,
+    special: { type: 'tabla', steps: [1, 6, 11, 15], level: 0.06 },
+  },
+  'dune-cinematic': {
+    kicks: [0, 6, 12], snares: [4, 10], hats: [3, 7, 11, 15],
+    bass: [0, 6, 12], bassDegrees: [0, 4, 1, 5], bassOctave: 1, bassWave: 'triangle', bassCutoff: 480, bassDuration: 0.48,
+    padEvery: 32, padDegrees: [0, 2, 4], padDuration: 4.4, padWave: 'sawtooth',
+    melody: [0, 4, 7, 10, 14], melodyDegrees: [0, 1, 4, 5, 3], melodySteps: 2.5, melodyLevel: 0.052,
+    special: { type: 'frame', steps: [2, 8, 14], level: 0.085 },
+  },
+  'pixel-chip': {
+    kicks: [0, 4, 8, 11, 12], snares: [4, 12], hats: [1, 3, 5, 7, 9, 11, 13, 15],
+    bass: [0, 2, 4, 7, 8, 10, 12, 14], bassDegrees: [0, 2, 4, 6, 5, 3, 1, 4], bassOctave: 2, bassWave: 'square', bassCutoff: 1150, bassDuration: 0.12,
+    padEvery: 32, padDegrees: [0, 2, 4], padDuration: 2.1, padWave: 'triangle',
+    melody: [0, 1, 2, 4, 6, 7, 8, 10, 12, 13, 15], melodyDegrees: [0, 2, 4, 6, 4, 2, 1, 3, 5, 6, 3], melodySteps: 0.72, melodyLevel: 0.033,
+    special: { type: 'chip', steps: [6, 15], level: 0.04 },
+  },
+});
+
+export const MUSIC_MASTERING = deepFreeze({
+  synthBaseGain: 0.16,
+  customBaseGain: 0.62,
+  intensityFloor: 0.35,
+  intensityScale: 0.65,
+  compressor: { threshold: -18, knee: 12, ratio: 5, attack: 0.004, release: 0.16 },
+  customCompressor: { threshold: -3, knee: 4, ratio: 2, attack: 0.012, release: 0.12 },
+  limiter: { threshold: -1, knee: 0, ratio: 20, attack: 0.001, release: 0.08, ceilingDb: -1 },
+});
+
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+const hashSeed = (text) => {
+  let hash = 2166136261;
+  for (let index = 0; index < String(text).length; index += 1) {
+    hash ^= String(text).charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+const mulberry32 = (seed) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let result = state;
+    result = Math.imul(result ^ (result >>> 15), result | 1);
+    result ^= result + Math.imul(result ^ (result >>> 7), result | 61);
+    return ((result ^ (result >>> 14)) >>> 0) / 4294967296;
+  };
+};
 const nowFromClock = (clock) => {
   if (clock && typeof clock.now === 'function') return clock.now() / 1000;
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now() / 1000;
@@ -16,6 +127,15 @@ const midiForNote = (noteName, octave) => {
   const semitones = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
   const accidental = match[2] === '#' ? 1 : match[2] === 'b' ? -1 : 0;
   return (octave + 1) * 12 + semitones[match[1]] + accidental;
+};
+
+const frequencyForDegree = (track, degree, octave) => {
+  const scale = track?.music?.scale?.length ? track.music.scale : ['A'];
+  const normalized = Math.round(degree);
+  const wrapped = ((normalized % scale.length) + scale.length) % scale.length;
+  const octaveShift = Math.floor(normalized / scale.length);
+  const midi = midiForNote(scale[wrapped], octave + octaveShift);
+  return 440 * 2 ** ((midi - 69) / 12);
 };
 
 const frequencyFor = (track, note) => {
@@ -46,8 +166,13 @@ export class ProceduralMusic {
 
     this.context = null;
     this.masterGain = null;
+    this.masterCompressor = null;
+    this.masterLimiter = null;
+    this.masterCeiling = null;
     this.track = null;
     this.beatmap = [];
+    this.customBuffer = null;
+    this.customSource = null;
     this.phase = 'stopped';
     this.offsetSeconds = 0;
     this.anchorSeconds = 0;
@@ -66,15 +191,24 @@ export class ProceduralMusic {
     this._stopActiveNodes();
     this.disposed = false;
     this.track = track;
-    this.beatmap = createBeatmap(track);
-    this.offsetSeconds = clamp(offsetSeconds, 0, Math.max(0, track.duration - 0.1));
+    this.noiseBuffer = null;
+    this.customBuffer = track?.audioBuffer ?? track?.customAudioBuffer ?? track?.audio?.buffer ?? null;
+    try {
+      this.beatmap = createBeatmap(track);
+    } catch {
+      this.beatmap = [];
+    }
+    const duration = Number(track?.duration) || Number(this.customBuffer?.duration) || 0;
+    this.offsetSeconds = clamp(offsetSeconds, 0, Math.max(0, duration - 0.1));
     this._ensureAudioGraph();
+    this._configureMastering();
     this.anchorSeconds = this._now();
     this.phase = 'playing';
     this.scheduledIndex = this._findScheduleIndex(this.offsetSeconds);
     this.scheduledMusicStep = this._findMusicStep(this.offsetSeconds);
     safeCall(this.context, 'resume');
     this._applyMasterLevel();
+    this._startCustomSource();
     this._scheduleWindow();
     this._armTimer();
     return this;
@@ -97,6 +231,7 @@ export class ProceduralMusic {
     this.scheduledIndex = this._findScheduleIndex(this.offsetSeconds);
     this.scheduledMusicStep = this._findMusicStep(this.offsetSeconds);
     safeCall(this.context, 'resume');
+    this._startCustomSource();
     this._scheduleWindow();
     this._armTimer();
     return this;
@@ -110,7 +245,24 @@ export class ProceduralMusic {
     this.anchorSeconds = this._now();
     this.scheduledIndex = 0;
     this.scheduledMusicStep = 0;
+    this.customSource = null;
     return this;
+  }
+
+  startCustom(audioBuffer, trackOrOptions = {}, offsetSeconds = 0) {
+    const track = trackOrOptions?.id
+      ? { ...trackOrOptions, audioBuffer, duration: Number(trackOrOptions.duration) || Number(audioBuffer?.duration) || 0 }
+      : {
+          id: 'custom-audio',
+          title: trackOrOptions?.title || 'Custom Rift',
+          artist: trackOrOptions?.artist || 'LOCAL // YOU',
+          bpm: Number(trackOrOptions?.bpm) || 120,
+          duration: Number(audioBuffer?.duration) || Number(trackOrOptions?.duration) || 0,
+          beatmap: Array.isArray(trackOrOptions?.beatmap) ? trackOrOptions.beatmap : [],
+          audioBuffer,
+          music: { profile: 'custom-audio', scale: ['A'], instruments: { lead: { wave: 'sine', octave: 4 } } },
+        };
+    return this.start(track, offsetSeconds);
   }
 
   getTime() {
@@ -140,8 +292,13 @@ export class ProceduralMusic {
     safeCall(this.context, 'close');
     this.context = null;
     this.masterGain = null;
+    this.masterCompressor = null;
+    this.masterLimiter = null;
+    this.masterCeiling = null;
     this.track = null;
     this.beatmap = [];
+    this.customBuffer = null;
+    this.customSource = null;
     this.noiseBuffer = null;
     return this;
   }
@@ -160,21 +317,76 @@ export class ProceduralMusic {
       this.context = new ContextCtor();
       if (typeof this.context.createGain === 'function') {
         this.masterGain = this.context.createGain();
-        safeCall(this.masterGain, 'connect', this.context.destination);
+        this.masterCompressor = safeCall(this.context, 'createDynamicsCompressor') ?? null;
+        this.masterLimiter = safeCall(this.context, 'createDynamicsCompressor') ?? null;
+        this.masterCeiling = safeCall(this.context, 'createWaveShaper') ?? null;
+        if (this.masterCeiling) {
+          const ceiling = 10 ** (MUSIC_MASTERING.limiter.ceilingDb / 20);
+          this.masterCeiling.curve = Float32Array.from({ length: 4096 }, (_unused, index) => {
+            const input = index / 2047.5 - 1;
+            return clamp(input, -ceiling, ceiling);
+          });
+          this.masterCeiling.oversample = '4x';
+        }
+
+        let output = this.masterGain;
+        if (this.masterCompressor) output = safeCall(output, 'connect', this.masterCompressor) ?? this.masterCompressor;
+        if (this.masterLimiter) output = safeCall(output, 'connect', this.masterLimiter) ?? this.masterLimiter;
+        if (this.masterCeiling) output = safeCall(output, 'connect', this.masterCeiling) ?? this.masterCeiling;
+        safeCall(output, 'connect', this.context.destination);
       }
     } catch {
       this.context = null;
       this.masterGain = null;
+      this.masterCompressor = null;
+      this.masterLimiter = null;
+      this.masterCeiling = null;
+    }
+  }
+
+  _configureMastering() {
+    const at = this.context?.currentTime || 0;
+    const compressorConfig = this.customBuffer ? MUSIC_MASTERING.customCompressor : MUSIC_MASTERING.compressor;
+    if (this.masterCompressor) {
+      this.masterCompressor.threshold?.setValueAtTime?.(compressorConfig.threshold, at);
+      this.masterCompressor.knee?.setValueAtTime?.(compressorConfig.knee, at);
+      this.masterCompressor.ratio?.setValueAtTime?.(compressorConfig.ratio, at);
+      this.masterCompressor.attack?.setValueAtTime?.(compressorConfig.attack, at);
+      this.masterCompressor.release?.setValueAtTime?.(compressorConfig.release, at);
+    }
+    if (this.masterLimiter) {
+      const limiterConfig = MUSIC_MASTERING.limiter;
+      this.masterLimiter.threshold?.setValueAtTime?.(limiterConfig.threshold, at);
+      this.masterLimiter.knee?.setValueAtTime?.(limiterConfig.knee, at);
+      this.masterLimiter.ratio?.setValueAtTime?.(limiterConfig.ratio, at);
+      this.masterLimiter.attack?.setValueAtTime?.(limiterConfig.attack, at);
+      this.masterLimiter.release?.setValueAtTime?.(limiterConfig.release, at);
     }
   }
 
   _applyMasterLevel() {
-    const level = this.muted ? 0 : 0.18 * (0.35 + this.intensity * 0.65);
+    const base = this.customBuffer ? MUSIC_MASTERING.customBaseGain : MUSIC_MASTERING.synthBaseGain;
+    const level = this.muted ? 0 : base * (MUSIC_MASTERING.intensityFloor + this.intensity * MUSIC_MASTERING.intensityScale);
     const gain = this.masterGain?.gain;
     if (!gain) return;
     const at = this.context?.currentTime ?? 0;
     if (typeof gain.setTargetAtTime === 'function') gain.setTargetAtTime(level, at, 0.015);
     else gain.value = level;
+  }
+
+  _startCustomSource() {
+    if (!this.customBuffer || !this.context || !this.masterGain || this.phase !== 'playing' || this.customSource) return;
+    const source = safeCall(this.context, 'createBufferSource');
+    if (!source) return;
+    source.buffer = this.customBuffer;
+    safeCall(source, 'connect', this.masterGain);
+    this.customSource = source;
+    this.activeNodes.add(source);
+    source.onended = () => {
+      this.activeNodes.delete(source);
+      if (this.customSource === source) this.customSource = null;
+    };
+    safeCall(source, 'start', this.context.currentTime ?? this._now(), clamp(this.offsetSeconds, 0, Math.max(0, this.customBuffer.duration - 0.02)));
   }
 
   _findScheduleIndex(time) {
@@ -217,7 +429,16 @@ export class ProceduralMusic {
       return;
     }
 
-    const horizon = trackTime + this.lookAheadSeconds * (0.85 + this.intensity * 0.3);
+    const horizon = Math.min(this.track.duration, trackTime + this.lookAheadSeconds * (0.85 + this.intensity * 0.3));
+    if (this.customBuffer) {
+      // The uploaded recording is already the complete arrangement. Do not layer
+      // synthesized lead notes over music the player chose; gameplay consumes the
+      // attached beatmap independently.
+      while (this.scheduledIndex < this.beatmap.length && this.beatmap[this.scheduledIndex].time <= horizon) {
+        this.scheduledIndex += 1;
+      }
+      return;
+    }
     const stepDuration = this._stepDuration();
     while (this.scheduledMusicStep * stepDuration <= horizon) {
       const stepTime = this.scheduledMusicStep * stepDuration;
@@ -228,71 +449,106 @@ export class ProceduralMusic {
       this.scheduledMusicStep += 1;
     }
     while (this.scheduledIndex < this.beatmap.length && this.beatmap[this.scheduledIndex].time <= horizon) {
-      const note = this.beatmap[this.scheduledIndex];
-      const when = (this.context?.currentTime ?? this._now()) + Math.max(0, note.time - trackTime);
-      this._scheduleNote(note, when);
+      // Chart notes drive blocks and scoring. The authored profile motif below is
+      // the one musical lead, preventing dense charts from doubling the melody.
       this.scheduledIndex += 1;
     }
   }
 
   _scheduleMusicStep(stepIndex, trackTime, when) {
     if (!this.context || !this.masterGain || !this.track) return;
-    const id = this.track.id;
     const beatStep = stepIndex % 16;
     const beat = Math.floor(stepIndex / 4);
+    const bar = Math.floor(stepIndex / 16);
     const section = this.track.music?.arrangement?.find((candidate) => trackTime >= candidate.from && trackTime < candidate.to)
       ?? this.track.music?.arrangement?.at?.(-1)
       ?? { intensity: 0.7, motif: [0, 2, 4, 1] };
     const energy = clamp(section.intensity * (0.55 + this.intensity * 0.45), 0.12, 1.35);
+    const profile = this.track.music?.profile ?? 'neon-liquid';
+    const pattern = MUSIC_PROFILE_RECIPES[profile] ?? MUSIC_PROFILE_RECIPES['neon-liquid'];
+    const swing = clamp(Number(this.track.music?.swing) || 0, 0, 0.24);
+    const swungWhen = when + (stepIndex % 2 === 1 ? this._stepDuration() * swing : 0);
+    const motif = section.motif?.length ? section.motif : [0, 2, 4, 1];
+    const harmonicRoot = motif[Math.floor(bar / 2) % motif.length] ?? 0;
 
-    if (id === 'ember-circuit-choir') {
-      if ([0, 6, 10].includes(beatStep)) this._scheduleKick(when, 0.82 * energy, beatStep === 0 ? 58 : 48);
-      if (beatStep === 8) this._scheduleNoise(when, 0.19 * energy, 0.22, 920, 'bandpass');
-      if ([3, 7, 11, 15].includes(beatStep)) this._scheduleNoise(when, 0.055 * energy, 0.055, 3100, 'highpass');
-      if (beatStep % 8 === 0) this._scheduleBass(when, 36.7 * (beatStep === 8 ? 1.122 : 1), 0.46, 0.2 * energy, 'sawtooth', 420);
-      if (stepIndex % 32 === 0) this._schedulePad(when, [73.42, 87.31, 110], 2.6, 0.045 * energy, 'triangle');
-      if (beatStep === 12) this._scheduleMetalHit(when, 176 + (beat % 3) * 22, 0.13 * energy);
-      return;
+    if (pattern.kicks.includes(beatStep)) {
+      this._scheduleKick(swungWhen, (beatStep === 0 ? 0.72 : 0.58) * energy, beatStep === 0 ? 64 : 52);
+    }
+    if (pattern.snares.includes(beatStep) && energy > 0.28) {
+      const lowSnare = profile === 'forge-ritual' || profile === 'dune-cinematic';
+      this._scheduleNoise(swungWhen, (lowSnare ? 0.16 : 0.12) * energy, lowSnare ? 0.19 : 0.12, lowSnare ? 1050 : 2100, 'bandpass');
+    }
+    if (pattern.hats.includes(beatStep) && energy > 0.38) {
+      const open = pattern.openHats?.includes(beatStep);
+      this._scheduleNoise(swungWhen, (open ? 0.045 : 0.026) * energy, open ? 0.13 : 0.038, 5600 + (beatStep % 4) * 520, 'highpass');
     }
 
-    if (id === 'glass-orbit-monsoon') {
-      if ([0, 6, 10].includes(beatStep)) this._scheduleKick(when, 0.72 * energy, beatStep === 0 ? 72 : 54);
-      if ([4, 12].includes(beatStep)) this._scheduleNoise(when, 0.18 * energy, 0.14, 1850, 'bandpass');
-      if ([1, 3, 5, 7, 9, 11, 13, 15].includes(beatStep)) this._scheduleNoise(when, 0.035 * energy, 0.035, 5900 + (beatStep % 4) * 800, 'highpass');
-      if ([2, 5, 11, 14].includes(beatStep)) this._scheduleTabla(when, 155 + beatStep * 7, 0.075 * energy);
-      if (beatStep % 4 === 0) this._scheduleBass(when, beat % 4 === 3 ? 61.74 : 55, 0.2, 0.13 * energy, 'square', 760);
-      if (stepIndex % 64 === 0) this._schedulePad(when, [110, 138.59, 164.81], 3.8, 0.032 * energy, 'sine');
-      return;
+    const bassIndex = pattern.bass.indexOf(beatStep);
+    if (bassIndex >= 0 && energy > 0.26) {
+      const degree = (pattern.bassDegrees[(bassIndex + bar) % pattern.bassDegrees.length] ?? 0) + harmonicRoot;
+      const bassFrequency = frequencyForDegree(this.track, degree, pattern.bassOctave ?? this.track.music?.instruments?.bass?.octave ?? 2);
+      this._scheduleBass(
+        swungWhen,
+        bassFrequency,
+        pattern.bassDuration ?? Math.min(0.3, this._stepDuration() * 1.7),
+        0.105 * energy,
+        pattern.bassWave ?? this.track.music?.instruments?.bass?.wave ?? 'triangle',
+        pattern.bassCutoff ?? 760,
+      );
     }
 
-    // Neon Tide Run: a bright four-on-the-floor pulse with syncopated glass hats.
-    if (beatStep % 4 === 0) this._scheduleKick(when, 0.66 * energy, beatStep === 0 ? 68 : 58);
-    if ([4, 12].includes(beatStep)) this._scheduleNoise(when, 0.15 * energy, 0.12, 2200, 'bandpass');
-    if (beatStep % 2 === 1) this._scheduleNoise(when, 0.03 * energy, 0.035, 7200, 'highpass');
-    if ([0, 3, 8, 11].includes(beatStep)) {
-      const bassDegrees = [46.25, 55, 61.74, 69.3];
-      this._scheduleBass(when, bassDegrees[(beat + beatStep) % bassDegrees.length], 0.19, 0.12 * energy, 'triangle', 920);
+    if (stepIndex % pattern.padEvery === 0) {
+      const padOctave = this.track.music?.instruments?.pad?.octave ?? 3;
+      const chord = pattern.padDegrees.map((degree) => frequencyForDegree(this.track, degree + harmonicRoot, padOctave));
+      this._schedulePad(swungWhen, chord, pattern.padDuration, 0.026 * energy, pattern.padWave ?? 'sine');
     }
-    if (stepIndex % 64 === 0) this._schedulePad(when, [92.5, 110, 138.59], 3.5, 0.032 * energy, 'sine');
+
+    const melodyIndex = pattern.melody.indexOf(beatStep);
+    if (melodyIndex >= 0 && energy > 0.24) {
+      const degree = harmonicRoot + pattern.melodyDegrees[(melodyIndex + bar) % pattern.melodyDegrees.length];
+      const lead = this.track.music?.instruments?.lead ?? {};
+      const frequency = frequencyForDegree(this.track, degree, pattern.melodyOctave ?? lead.octave ?? 4);
+      this._scheduleLead(
+        swungWhen,
+        frequency,
+        this._stepDuration() * pattern.melodySteps,
+        pattern.melodyLevel * energy,
+        pattern.melodyWave ?? lead.wave ?? 'sine',
+        lead.envelope,
+      );
+    }
+
+    if (pattern.special?.steps.includes(beatStep) && energy > 0.42) {
+      const level = pattern.special.level * energy;
+      if (pattern.special.type === 'metal') this._scheduleMetalHit(swungWhen, 154 + (beat % 3) * 19, level);
+      else if (pattern.special.type === 'tabla' || pattern.special.type === 'frame' || pattern.special.type === 'wood') {
+        this._scheduleTabla(swungWhen, pattern.special.type === 'frame' ? 92 : 145 + beatStep * 5, level);
+      } else if (pattern.special.type === 'sonar' || pattern.special.type === 'ice') {
+        const octave = pattern.special.type === 'ice' ? 6 : 5;
+        this._scheduleBell(swungWhen, frequencyForDegree(this.track, harmonicRoot + beatStep % 5, octave), level);
+      } else if (pattern.special.type === 'chip') {
+        this._scheduleBass(swungWhen, frequencyForDegree(this.track, beatStep % 7, 5), 0.075, level, 'square', 2800);
+      }
+    }
   }
 
-  _scheduleNote(note, when) {
+  _scheduleLead(when, frequency, duration, level, wave = 'sine', envelope = undefined) {
     if (!this.context || !this.masterGain) return;
     const oscillator = safeCall(this.context, 'createOscillator');
     const gainNode = safeCall(this.context, 'createGain');
     const filter = safeCall(this.context, 'createBiquadFilter');
     if (!oscillator || !gainNode) return;
 
-    oscillator.type = this.track?.music?.instruments?.lead?.wave ?? 'sine';
+    oscillator.type = ['sine', 'triangle', 'sawtooth', 'square'].includes(wave) ? wave : 'sine';
     if (oscillator.frequency) {
-      if (typeof oscillator.frequency.setValueAtTime === 'function') oscillator.frequency.setValueAtTime(frequencyFor(this.track, note), when);
-      else oscillator.frequency.value = frequencyFor(this.track, note);
+      if (typeof oscillator.frequency.setValueAtTime === 'function') oscillator.frequency.setValueAtTime(frequency, when);
+      else oscillator.frequency.value = frequency;
     }
 
     if (filter) {
       filter.type = 'lowpass';
       if (filter.frequency) {
-        const cutoff = note.accent ? 2800 + this.intensity * 1400 : 1600 + this.intensity * 900;
+        const cutoff = 1900 + this.intensity * 1050;
         if (typeof filter.frequency.setValueAtTime === 'function') filter.frequency.setValueAtTime(cutoff, when);
         else filter.frequency.value = cutoff;
       }
@@ -304,19 +560,34 @@ export class ProceduralMusic {
     safeCall(gainNode, 'connect', this.masterGain);
 
     const gain = gainNode.gain;
-    const peak = (note.accent ? 0.16 : 0.09) * (0.45 + this.intensity * 0.55);
-    const duration = note.accent ? 0.18 : 0.11;
+    const shape = Array.isArray(envelope) ? envelope : [0.006, 0.08, 0.4, 0.14];
+    const attack = clamp(Number(shape[0]) || 0.006, 0.002, 0.12);
+    const release = clamp(Number(shape[3]) || 0.14, 0.07, 0.65);
+    const audibleDuration = clamp(Math.max(duration, release), attack + 0.04, 0.72);
+    const peak = clamp(level, 0.0001, 0.14);
     if (gain) {
       if (typeof gain.setValueAtTime === 'function') gain.setValueAtTime(0.0001, when);
-      if (typeof gain.exponentialRampToValueAtTime === 'function') gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), when + 0.012);
-      if (typeof gain.exponentialRampToValueAtTime === 'function') gain.exponentialRampToValueAtTime(0.0001, when + duration);
+      if (typeof gain.exponentialRampToValueAtTime === 'function') gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), when + attack);
+      if (typeof gain.exponentialRampToValueAtTime === 'function') gain.exponentialRampToValueAtTime(0.0001, when + audibleDuration);
       else gain.value = peak;
     }
 
     this.activeNodes.add(oscillator);
     oscillator.onended = () => this.activeNodes.delete(oscillator);
     safeCall(oscillator, 'start', when);
-    safeCall(oscillator, 'stop', when + duration + 0.02);
+    safeCall(oscillator, 'stop', when + audibleDuration + 0.02);
+  }
+
+  _scheduleNote(note, when) {
+    const lead = this.track?.music?.instruments?.lead ?? {};
+    this._scheduleLead(
+      when,
+      frequencyFor(this.track, note),
+      note.accent ? 0.26 : 0.16,
+      (note.accent ? 0.09 : 0.052) * (0.45 + this.intensity * 0.55),
+      lead.wave,
+      lead.envelope,
+    );
   }
 
   _scheduleKick(when, level = 0.6, tailFrequency = 52) {
@@ -417,6 +688,22 @@ export class ProceduralMusic {
     this._startNode(oscillator, when, when + 0.13);
   }
 
+  _scheduleBell(when, frequency, level) {
+    [1, 2.01, 3.98].forEach((ratio, index) => {
+      const oscillator = safeCall(this.context, 'createOscillator');
+      const gainNode = safeCall(this.context, 'createGain');
+      if (!oscillator || !gainNode) return;
+      oscillator.type = index === 0 ? 'sine' : 'triangle';
+      oscillator.frequency?.setValueAtTime?.(frequency * ratio, when);
+      const partialLevel = Math.max(0.0001, level / (1 + index * 1.8));
+      gainNode.gain?.setValueAtTime?.(partialLevel, when);
+      gainNode.gain?.exponentialRampToValueAtTime?.(0.0001, when + 0.48 + index * 0.12);
+      safeCall(oscillator, 'connect', gainNode);
+      safeCall(gainNode, 'connect', this.masterGain);
+      this._startNode(oscillator, when, when + 0.64 + index * 0.12);
+    });
+  }
+
   _startNode(node, startAt, stopAt) {
     this.activeNodes.add(node);
     node.onended = () => this.activeNodes.delete(node);
@@ -431,9 +718,10 @@ export class ProceduralMusic {
       const sampleRate = this.context.sampleRate || 44100;
       const buffer = this.context.createBuffer(1, sampleRate, sampleRate);
       const channel = buffer.getChannelData(0);
+      const random = mulberry32(hashSeed(this.track?.music?.seed ?? this.track?.id ?? 'riftblade-noise'));
       let previous = 0;
       for (let index = 0; index < channel.length; index += 1) {
-        const white = Math.random() * 2 - 1;
+        const white = random() * 2 - 1;
         previous = previous * 0.82 + white * 0.18;
         channel[index] = white * 0.7 + previous * 0.3;
       }
@@ -447,5 +735,6 @@ export class ProceduralMusic {
   _stopActiveNodes() {
     for (const node of this.activeNodes) safeCall(node, 'stop', 0);
     this.activeNodes.clear();
+    this.customSource = null;
   }
 }

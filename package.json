@@ -1,9 +1,9 @@
 {
   "name": "riftblade-webxr",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "An original three-track WebXR rhythm blade experience.",
+  "description": "A ten-track Three.js WebXR rhythm blade experience with auto, zen, custom music and mobile controls.",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",

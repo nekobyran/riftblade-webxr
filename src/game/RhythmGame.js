@@ -6,6 +6,7 @@ import {
   BeatmapRuntime,
   DEFAULT_RULES,
   NOTE_PLANE_Z,
+  NOTE_ROW_COUNT,
   ScoreKeeper,
   createDesktopSweep,
   directionVector,
@@ -14,6 +15,17 @@ import {
   noteWorldPosition,
   rowToY,
 } from './RhythmLogic.js';
+import { VRMenu } from './VRMenu.js';
+import { VRHud, createHapticProfile } from './VRHud.js';
+
+export const GAME_MODES = Object.freeze({ STANDARD: 'standard', AUTO: 'auto', ZEN: 'zen' });
+
+export function normalizeGameMode(mode) {
+  const value = String(mode || '').toLowerCase();
+  if (['auto', 'automatic', 'autoplay'].includes(value)) return GAME_MODES.AUTO;
+  if (['zen', 'pure', 'pure-enjoyment', 'visualizer'].includes(value)) return GAME_MODES.ZEN;
+  return GAME_MODES.STANDARD;
+}
 
 const THEME_PRESETS = Object.freeze({
   neon: {
@@ -23,6 +35,8 @@ const THEME_PRESETS = Object.freeze({
     grid: 0x44e7ff,
     sky: [0x070014, 0x11104a, 0x3f1d79],
     bloom: 0xff3df5,
+    accent: 0x43d9ff,
+    archetype: 'city',
   },
   magma: {
     key: 'magma',
@@ -31,6 +45,8 @@ const THEME_PRESETS = Object.freeze({
     grid: 0xff8a20,
     sky: [0x110303, 0x5f1705, 0xff5a1f],
     bloom: 0xffc04d,
+    accent: 0xff542e,
+    archetype: 'forge',
   },
   orbit: {
     key: 'orbit',
@@ -39,26 +55,58 @@ const THEME_PRESETS = Object.freeze({
     grid: 0x8be9ff,
     sky: [0x02141f, 0x0c4366, 0xa1f7ff],
     bloom: 0x8be9ff,
+    accent: 0xd4a8ff,
+    archetype: 'orbit',
   },
+  sakura: { key: 'sakura', fog: 0x170b24, floor: 0x251230, grid: 0xff9fce, sky: [0x10051d, 0x5b1e58, 0xffb2d4], bloom: 0xff6fb7, accent: 0x9df4ff, archetype: 'petals' },
+  abyss: { key: 'abyss', fog: 0x010916, floor: 0x020d18, grid: 0x176b99, sky: [0x00040b, 0x002945, 0x00d9d0], bloom: 0x00f5d4, accent: 0x258dff, archetype: 'depth' },
+  solar: { key: 'solar', fog: 0x190805, floor: 0x241008, grid: 0xff9b38, sky: [0x160404, 0x8d2008, 0xffe063], bloom: 0xffb12e, accent: 0xfff1a6, archetype: 'sun' },
+  ice: { key: 'ice', fog: 0x061424, floor: 0x0a2236, grid: 0x9be8ff, sky: [0x030d1d, 0x174b72, 0xd9fbff], bloom: 0xbceeff, accent: 0x7b8cff, archetype: 'crystal' },
+  jungle: { key: 'jungle', fog: 0x06150c, floor: 0x092114, grid: 0x76e65e, sky: [0x031109, 0x145127, 0xb6ff6c], bloom: 0x8cff4f, accent: 0xffdc55, archetype: 'canopy' },
+  desert: { key: 'desert', fog: 0x25120a, floor: 0x321a0d, grid: 0xffb85c, sky: [0x1c0808, 0x9b3c19, 0xffd080], bloom: 0xff8e3c, accent: 0x70e7ff, archetype: 'dunes' },
+  void: { key: 'void', fog: 0x05020d, floor: 0x0e071b, grid: 0x914dff, sky: [0x010105, 0x18052f, 0xb044ff], bloom: 0xe854ff, accent: 0x59fff2, archetype: 'digital' },
 });
 
 const DAMAGE_STYLES = Object.freeze({
-  ember: { left: 0xff6033, right: 0xffd166, hurt: 0xff2a00 },
-  voltaic: { left: 0x54f7ff, right: 0xc45cff, hurt: 0xf4ff5a },
-  prism: { left: 0x7fffe5, right: 0xf0abfc, hurt: 0xffffff },
+  ember: { left: 0xff6033, right: 0xffd166, hurt: 0xff2a00, motion: 'embers' },
+  voltaic: { left: 0x54f7ff, right: 0xc45cff, hurt: 0xf4ff5a, motion: 'electric' },
+  prism: { left: 0x7fffe5, right: 0xf0abfc, hurt: 0xffffff, motion: 'prism' },
+  petal: { left: 0xff8ec8, right: 0xa3f2ff, hurt: 0xffd1e8, motion: 'petal' },
+  abyss: { left: 0x18e0cb, right: 0x247bff, hurt: 0x85fff0, motion: 'bubble' },
+  solar: { left: 0xff9b2f, right: 0xfff09d, hurt: 0xff4d1f, motion: 'flare' },
+  frost: { left: 0xbff4ff, right: 0x7c8cff, hurt: 0xffffff, motion: 'shard' },
+  jungle: { left: 0x7dff69, right: 0xffdc55, hurt: 0xd6ff92, motion: 'leaf' },
+  sand: { left: 0xffb55c, right: 0x70e7ff, hurt: 0xfff0bd, motion: 'sand' },
+  void: { left: 0xb26cff, right: 0x50ffe5, hurt: 0xff55ea, motion: 'glitch' },
 });
 
 const TRACK_THEME = Object.freeze({
   'neon-tide-run': 'neon',
   'ember-circuit-choir': 'magma',
   'glass-orbit-monsoon': 'orbit',
+  'sakura-ion-reverie': 'sakura',
+  'abyss-rail-frenzy': 'abyss',
+  'helios-lift': 'solar',
+  'cryo-cathedral-lullaby': 'ice',
+  'jade-canopy-heartbeat': 'jungle',
+  'dune-crown-overture': 'desert',
+  'pixel-void-overdrive': 'void',
 });
 
 const TRACK_DAMAGE = Object.freeze({
   'neon-tide-run': 'voltaic',
   'ember-circuit-choir': 'ember',
   'glass-orbit-monsoon': 'prism',
+  'sakura-ion-reverie': 'petal',
+  'abyss-rail-frenzy': 'abyss',
+  'helios-lift': 'solar',
+  'cryo-cathedral-lullaby': 'frost',
+  'jade-canopy-heartbeat': 'jungle',
+  'dune-crown-overture': 'sand',
+  'pixel-void-overdrive': 'void',
 });
+
+const THEME_DAMAGE = Object.freeze({ neon: 'voltaic', magma: 'ember', orbit: 'prism', sakura: 'petal', abyss: 'abyss', solar: 'solar', ice: 'frost', jungle: 'jungle', desert: 'sand', void: 'void' });
 
 const HAND_COLORS = Object.freeze({
   [Hand.LEFT]: 0x43d9ff,
@@ -66,11 +114,14 @@ const HAND_COLORS = Object.freeze({
 });
 
 export class RhythmGame {
-  constructor({ canvas, eventTarget = new EventTarget(), music = null } = {}) {
+  constructor({ canvas, eventTarget = new EventTarget(), music = null, tracks = [], mode = GAME_MODES.STANDARD, onVRSelection = null } = {}) {
     if (!canvas) throw new Error('RhythmGame requires a canvas');
     this.canvas = canvas;
     this.eventTarget = eventTarget;
     this.music = music;
+    this.tracks = Array.isArray(tracks) ? tracks : [];
+    this.mode = normalizeGameMode(mode);
+    this.onVRSelection = onVRSelection;
     this.rules = DEFAULT_RULES;
     this.score = new ScoreKeeper(this.rules);
     this.track = null;
@@ -80,6 +131,8 @@ export class RhythmGame {
     this.clock = new THREE.Clock(false);
     this.fallbackStart = 0;
     this.renderer = null;
+    this.composer = null;
+    this.bloomPass = null;
     this.scene = null;
     this.camera = null;
     this.player = null;
@@ -92,26 +145,60 @@ export class RhythmGame {
     this.sweepQueue = [];
     this.noteMeshes = new Map();
     this.damageEffects = [];
+    this.pendingTimers = new Set();
     this.vrButton = null;
+    this.vrMenu = null;
+    this.vrHud = null;
     this.desktopPointer = { x: 0, y: 0, active: false };
+    this.touchSabers = {
+      [Hand.LEFT]: { x: -0.55, y: 0, active: false, previousX: -0.55, previousY: 0 },
+      [Hand.RIGHT]: { x: 0.55, y: 0, active: false, previousX: 0.55, previousY: 0 },
+    };
+    this.viewRotation = { yaw: 0, pitch: 0 };
     this.reducedMotion = false;
+    this.lowPower = false;
     this.disposed = false;
     this._boundFrame = (time, frame) => this._frame(time, frame);
     this._boundKeyDown = (event) => this._onKeyDown(event);
     this._boundPointerMove = (event) => this._onPointerMove(event);
     this._boundPointerDown = (event) => this._onPointerDown(event);
     this._boundContextMenu = (event) => event.preventDefault();
-    this._boundSessionStart = () => this._emit(GameplayEvent.XR_CHANGE, { active: true, presenting: true, supported: true });
-    this._boundSessionEnd = () => this._emit(GameplayEvent.XR_CHANGE, { active: false, presenting: false, supported: true });
+    this._boundSessionStart = () => {
+      this.renderer?.setPixelRatio?.(1);
+      this.renderer?.xr?.setFoveation?.(this.lowPower ? 1 : 0.65);
+      // Entering a headset must never strand the player in a desktop-only
+      // state. Pause an already-running desktop session and always surface the
+      // ray-interactive selector at the start of the XR session.
+      if (this.phase === GamePhase.PLAYING) this.pause();
+      this.vrHud?.setPresenting?.(true);
+      this.openVRMenu('sessionstart');
+      if (this.vrButton) this.vrButton.textContent = 'EXIT VR';
+      this._emit(GameplayEvent.XR_CHANGE, { active: true, presenting: true, supported: true });
+    };
+    this._boundSessionEnd = () => {
+      this.closeVRMenu('sessionend');
+      this.vrHud?.setPresenting?.(false);
+      this.renderer?.setPixelRatio?.(Math.min(globalThis.devicePixelRatio || 1, this.lowPower ? 1.2 : 1.75));
+      if (this.vrButton) this.vrButton.textContent = 'ENTER VR';
+      this._emit(GameplayEvent.XR_CHANGE, { active: false, presenting: false, supported: true });
+    };
   }
 
   async initialize() {
     if (this.renderer) return;
     this.reducedMotion = Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    this.lowPower = Boolean(
+      globalThis.matchMedia?.('(pointer: coarse)').matches
+      || (Number(globalThis.navigator?.deviceMemory) > 0 && Number(globalThis.navigator?.deviceMemory) <= 4),
+    );
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2(0x090018, 0.035);
     this.camera = new THREE.PerspectiveCamera(70, 1, 0.05, 100);
-    this.camera.position.set(0, 1.65, 3.2);
+    // Keep the desktop viewpoint on the same ergonomic origin as room-scale
+    // XR. The judgement plane is now about one metre from the viewer rather
+    // than several metres down the tunnel.
+    this.camera.position.set(0, 1.65, 0.18);
+    this.camera.rotation.order = 'YXZ';
     this.player = new THREE.Group();
     this.player.add(this.camera);
     this.scene.add(this.player);
@@ -121,13 +208,23 @@ export class RhythmGame {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.xr.enabled = true;
     this.renderer.xr.setReferenceSpaceType('local-floor');
+    this.renderer.xr.setFramebufferScaleFactor?.(this.lowPower ? 0.78 : 0.92);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 1.75));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.shadowMap.enabled = !this.lowPower;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, this.lowPower ? 1.2 : 1.75));
     this.renderer.setClearColor(0x050008, 1);
+    this.renderer.xr.addEventListener('sessionstart', this._boundSessionStart);
+    this.renderer.xr.addEventListener('sessionend', this._boundSessionEnd);
 
     this._buildLights();
     this._buildEnvironment('neon');
     this._setupControllers();
+    await this._setupPostProcessing();
+    this._setupVRMenu();
+    this._setupVRHud();
     this._setupDesktopControls();
     this._createEnterVrButton();
     this.resize();
@@ -135,27 +232,166 @@ export class RhythmGame {
     this._setPhase(GamePhase.MENU);
   }
 
+  async _setupPostProcessing() {
+    if (!this.renderer || !this.scene || !this.camera || this.lowPower || this.reducedMotion) return;
+    try {
+      // XR bypasses post processing, so Quest/mobile never downloads this
+      // desktop-only bloom chunk. Light bands and emissive materials remain.
+      const [{ EffectComposer }, { RenderPass }, { UnrealBloomPass }] = await Promise.all([
+        import('three/examples/jsm/postprocessing/EffectComposer.js'),
+        import('three/examples/jsm/postprocessing/RenderPass.js'),
+        import('three/examples/jsm/postprocessing/UnrealBloomPass.js'),
+      ]);
+      if (this.disposed || !this.renderer) return;
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.72, 0.58, 0.72);
+      this.composer.addPass(this.bloomPass);
+    } catch {
+      // Bloom is enhancement-only; direct Three.js rendering remains playable.
+      this.composer = null;
+      this.bloomPass = null;
+    }
+  }
+
+  _setupVRMenu() {
+    this.vrMenu = new VRMenu({
+      tracks: this.tracks,
+      selectedTrackId: this.track?.id,
+      mode: this.mode,
+      onAction: (action, state) => this._handleVRMenuAction(action, state),
+    });
+    this.scene.add(this.vrMenu.group);
+  }
+
+  _setupVRHud() {
+    this.vrHud = new VRHud({ lowPower: this.lowPower, reducedMotion: this.reducedMotion });
+    this.vrHud.setPresenting(Boolean(this.renderer?.xr?.isPresenting));
+    this.vrHud.setMenuVisible(Boolean(this.vrMenu?.visible));
+    this.vrHud.setPhase(this.phase);
+    this.scene.add(this.vrHud.group);
+  }
+
   loadTrack(track) {
     this.track = track || null;
     this.beatmap = createBeatmapFromTrack(track);
-    this.runtime.reset(this.beatmap);
+    this.runtime.reset(this.mode === GAME_MODES.ZEN ? [] : this.beatmap);
     this.score = new ScoreKeeper(this.rules);
     this._clearNotes();
     const themeKey = resolveTheme(track);
     this._buildEnvironment(themeKey);
     this._applySaberStyle(resolveDamageStyle(track));
+    this.vrMenu?.setTrack?.(track?.id);
+    this.vrHud?.update?.({
+      time: 0,
+      duration: track?.duration,
+      state: this.score.snapshot(),
+      mode: this.mode,
+      phase: this.phase,
+      title: track?.title || track?.name,
+    }, { force: true });
     this._emitTick(0);
+  }
+
+  selectTrack(trackOrId, source = 'game') {
+    const track = typeof trackOrId === 'string' ? this.tracks.find((candidate) => candidate.id === trackOrId) : trackOrId;
+    if (!track) return false;
+    this.loadTrack(track);
+    this._emit(GameplayEvent.TRACK_SELECT, { track, trackId: track.id, mode: this.mode, source });
+    return true;
+  }
+
+  setTracks(tracks) {
+    this.tracks = Array.isArray(tracks) ? tracks : [];
+    this.vrMenu?.setTracks?.(this.tracks, this.track?.id);
+    return this.tracks;
+  }
+
+  setTrackCatalog(tracks) {
+    return this.setTracks(tracks);
+  }
+
+  setMode(mode, { source = 'game', forceEvent = false } = {}) {
+    const next = normalizeGameMode(mode);
+    if (next === this.mode && !forceEvent) return this.mode;
+    const changed = next !== this.mode;
+    this.mode = next;
+    this.vrMenu?.setMode?.(next);
+    if (changed && this.phase === GamePhase.PLAYING) {
+      this._clearNotes();
+      this.runtime.reset(next === GAME_MODES.ZEN ? [] : this.beatmap);
+    }
+    this._emit(GameplayEvent.MODE_CHANGE, { mode: next, trackId: this.track?.id || null, source, changed });
+    return next;
+  }
+
+  getMode() {
+    return this.mode;
+  }
+
+  openVRMenu(source = 'game') {
+    if (!this.vrMenu) return false;
+    this.vrMenu.setTracks(this.tracks, this.track?.id);
+    this.vrMenu.setMode(this.mode);
+    this.vrMenu.setVisible(true);
+    this.vrHud?.setMenuVisible?.(true);
+    this._emit(GameplayEvent.VR_MENU, {
+      visible: true,
+      source,
+      action: { type: 'open' },
+      state: { ...this.vrMenu.state },
+      trackId: this.vrMenu.state.selectedTrackId,
+      mode: this.vrMenu.state.mode,
+    });
+    return true;
+  }
+
+  closeVRMenu(source = 'game') {
+    const wasVisible = Boolean(this.vrMenu?.visible);
+    this.vrMenu?.setVisible?.(false);
+    this.vrHud?.setMenuVisible?.(false);
+    for (const controller of this.controllers) {
+      const ray = controller.getObjectByName?.('rift-menu-ray');
+      if (ray) ray.visible = false;
+      const reticle = controller.getObjectByName?.('rift-menu-reticle');
+      if (reticle) reticle.visible = false;
+    }
+    if (wasVisible) {
+      this._emit(GameplayEvent.VR_MENU, {
+        visible: false,
+        source,
+        action: { type: 'close' },
+        state: this.vrMenu ? { ...this.vrMenu.state } : null,
+        trackId: this.track?.id || null,
+        mode: this.mode,
+      });
+    }
+  }
+
+  _handleVRMenuAction(action, state) {
+    if (action.type === 'track') this.selectTrack(action.trackId, 'vr');
+    else if (action.type === 'mode') this.setMode(action.mode, { source: 'vr', forceEvent: true });
+    else if (action.type === 'start') {
+      if (action.trackId) this.selectTrack(action.trackId, 'vr');
+      this.setMode(action.mode, { source: 'vr', forceEvent: true });
+      this.closeVRMenu('vr-start');
+      this.start().catch((error) => this._emit('game:error', { source: 'vr-menu', message: error?.message || String(error) }));
+    }
+    const detail = { visible: this.vrMenu?.visible ?? false, source: 'vr', action, state, trackId: state.selectedTrackId, mode: state.mode };
+    this.onVRSelection?.(detail);
+    this._emit(GameplayEvent.VR_MENU, detail);
   }
 
   async start() {
     if (!this.renderer) await this.initialize();
     if (!this.track) this.loadTrack(createFallbackTrack());
     this._clearNotes();
-    this.runtime.reset(this.beatmap);
+    this.runtime.reset(this.mode === GAME_MODES.ZEN ? [] : this.beatmap);
     this.score = new ScoreKeeper(this.rules);
     this.fallbackStart = performance.now() / 1000;
     this.clock.start();
     await this.music?.start?.(this.track, 0);
+    this.closeVRMenu();
     this._setPhase(GamePhase.PLAYING);
   }
 
@@ -183,6 +419,7 @@ export class RhythmGame {
     this.clock.stop();
     this._clearNotes();
     this._setPhase(GamePhase.MENU);
+    if (this.renderer?.xr?.isPresenting) this.openVRMenu();
   }
 
   resize() {
@@ -193,6 +430,7 @@ export class RhythmGame {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.composer?.setSize?.(width, height);
   }
 
   dispose() {
@@ -206,31 +444,82 @@ export class RhythmGame {
     this.canvas.removeEventListener?.('contextmenu', this._boundContextMenu);
     this.renderer?.xr?.removeEventListener?.('sessionstart', this._boundSessionStart);
     this.renderer?.xr?.removeEventListener?.('sessionend', this._boundSessionEnd);
+    for (const controller of this.controllers) {
+      const handlers = controller.userData?.riftHandlers;
+      if (!handlers) continue;
+      controller.removeEventListener('connected', handlers.connected);
+      controller.removeEventListener('disconnected', handlers.disconnected);
+      controller.removeEventListener('selectstart', handlers.selectstart);
+      delete controller.userData.riftHandlers;
+    }
     this.vrButton?.remove?.();
+    for (const timer of this.pendingTimers) clearTimeout(timer);
+    this.pendingTimers.clear();
+    this.vrMenu?.dispose?.();
+    this.vrHud?.dispose?.();
     this._clearNotes();
     this._clearDamageEffects();
     this.scene?.traverse((object) => {
       object.geometry?.dispose?.();
-      if (Array.isArray(object.material)) object.material.forEach((m) => m.dispose?.());
-      else object.material?.dispose?.();
+      disposeMaterial(object.material);
     });
+    this.composer?.dispose?.();
+    this.composer = null;
+    this.bloomPass = null;
+    this.renderer?.renderLists?.dispose?.();
     this.renderer?.dispose?.();
+    this.sabers.clear();
+    this.controllerState.clear();
+    this.controllers.length = 0;
+    this.grips.length = 0;
+    this.damageEffects.length = 0;
+    this.noteMeshes.clear();
   }
 
   _buildLights() {
-    const hemi = new THREE.HemisphereLight(0xddeeff, 0x120014, 1.3);
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
+    const hemi = new THREE.HemisphereLight(0xddeeff, 0x120014, 0.92);
+    const key = new THREE.DirectionalLight(0xffffff, 2.15);
     key.position.set(2, 5, 3);
-    const rim = new THREE.PointLight(0xff3df5, 10, 9);
-    rim.position.set(-2.5, 2.8, -2);
-    this.scene.add(hemi, key, rim);
+    key.castShadow = !this.lowPower;
+    key.shadow.mapSize.set(this.lowPower ? 512 : 1024, this.lowPower ? 512 : 1024);
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 30;
+    key.shadow.camera.left = -7;
+    key.shadow.camera.right = 7;
+    key.shadow.camera.top = 8;
+    key.shadow.camera.bottom = -2;
+    const leftRim = new THREE.PointLight(0x43d9ff, 18, 11, 1.65);
+    leftRim.position.set(-2.7, 2.5, -1.4);
+    const rightRim = new THREE.PointLight(0xff4fd8, 18, 11, 1.65);
+    rightRim.position.set(2.7, 2.5, -1.4);
+    const beatLight = new THREE.PointLight(0xffffff, 12, 16, 1.45);
+    beatLight.position.set(0, 2.8, -4.5);
+    this.scene.add(hemi, key, leftRim, rightRim, beatLight);
+    this.worldLights = { hemi, key, leftRim, rightRim, beatLight };
   }
 
   _buildEnvironment(themeKey) {
     const theme = THEME_PRESETS[themeKey] || THEME_PRESETS.neon;
     clearGroup(this.environmentGroup);
     this.scene.fog = new THREE.FogExp2(theme.fog, 0.037);
+    this.scene.background = new THREE.Color(theme.fog);
     this.renderer?.setClearColor(theme.fog, 1);
+    if (this.renderer) this.renderer.toneMappingExposure = this.lowPower ? 0.98 : 1.08;
+    if (this.worldLights) {
+      this.worldLights.leftRim.color.setHex(theme.grid);
+      this.worldLights.rightRim.color.setHex(theme.bloom);
+      this.worldLights.beatLight.color.setHex(theme.accent);
+    }
+
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(42, this.lowPower ? 16 : 28, this.lowPower ? 10 : 18),
+      new THREE.MeshBasicMaterial({ color: theme.sky[0], side: THREE.BackSide, fog: false }),
+    );
+    sky.position.set(0, 6, -12);
+    sky.userData.motion = 'skyBreath';
+    sky.userData.baseColor = new THREE.Color(theme.sky[0]);
+    sky.userData.pulseColor = new THREE.Color(theme.sky[1]);
+    this.environmentGroup.add(sky);
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(18, 52, 18, 52),
@@ -246,6 +535,7 @@ export class RhythmGame {
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.z = -14;
+    floor.receiveShadow = true;
     floor.userData.motion = theme.key === 'neon' ? 'floorPulse' : null;
     this.environmentGroup.add(floor);
 
@@ -255,9 +545,26 @@ export class RhythmGame {
     grid.material.opacity = theme.key === 'magma' ? 0.22 : 0.4;
     this.environmentGroup.add(grid);
 
+    const laneMaterial = new THREE.MeshBasicMaterial({ color: theme.grid, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+    for (const lane of [-1.5, -0.5, 0.5, 1.5]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 11.4), laneMaterial.clone());
+      rail.position.set(laneToX(lane), 0.045, -6.25);
+      rail.userData.motion = 'laneRail';
+      rail.userData.phase = lane;
+      this.environmentGroup.add(rail);
+    }
+    laneMaterial.dispose();
+
+    const gateMaterial = new THREE.MeshBasicMaterial({ color: theme.accent, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, depthWrite: false });
+    const hitLine = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.028, 0.035), gateMaterial);
+    hitLine.position.set(0, 0.055, NOTE_PLANE_Z);
+    hitLine.userData.motion = 'hitGate';
+    this.environmentGroup.add(hitLine);
+
     if (theme.key === 'magma') this._buildForgeCathedral(theme);
     else if (theme.key === 'orbit') this._buildOrbitGarden(theme);
-    else this._buildNeonCauseway(theme);
+    else if (theme.key === 'neon') this._buildNeonCauseway(theme);
+    else this._buildSignatureWorld(theme);
 
     this.currentTheme = theme.key;
   }
@@ -287,7 +594,8 @@ export class RhythmGame {
       ring.userData.phase = i * 0.52;
       this.environmentGroup.add(ring);
     }
-    this.environmentGroup.add(createParticleField({ count: 180, color: theme.grid, rangeX: 11, minY: 0.2, maxY: 6, minZ: -34, maxZ: 2, size: 0.025, motion: 'neonRain' }));
+    gateMaterial.dispose();
+    this.environmentGroup.add(createParticleField({ count: this.lowPower ? 70 : 180, color: theme.grid, rangeX: 11, minY: 0.2, maxY: 6, minZ: -34, maxZ: 2, size: 0.025, motion: 'neonRain' }));
   }
 
   _buildForgeCathedral(theme) {
@@ -324,7 +632,9 @@ export class RhythmGame {
       seam.userData.phase = i * 0.37;
       this.environmentGroup.add(seam);
     }
-    this.environmentGroup.add(createParticleField({ count: 150, color: theme.bloom, rangeX: 9, minY: 0.1, maxY: 5, minZ: -32, maxZ: 1, size: 0.045, motion: 'embers' }));
+    hot.dispose();
+    dark.dispose();
+    this.environmentGroup.add(createParticleField({ count: this.lowPower ? 64 : 150, color: theme.bloom, rangeX: 9, minY: 0.1, maxY: 5, minZ: -32, maxZ: 1, size: 0.045, motion: 'embers' }));
   }
 
   _buildOrbitGarden(theme) {
@@ -351,7 +661,83 @@ export class RhythmGame {
       shard.userData.baseY = shard.position.y;
       this.environmentGroup.add(shard);
     }
-    this.environmentGroup.add(createParticleField({ count: 210, color: theme.grid, rangeX: 12, minY: 0.25, maxY: 7, minZ: -36, maxZ: 1, size: 0.032, motion: 'prismRain' }));
+    glass.dispose();
+    violet.dispose();
+    this.environmentGroup.add(createParticleField({ count: this.lowPower ? 84 : 210, color: theme.grid, rangeX: 12, minY: 0.25, maxY: 7, minZ: -36, maxZ: 1, size: 0.032, motion: 'prismRain' }));
+  }
+
+  _buildSignatureWorld(theme) {
+    const motifMaterial = new THREE.MeshStandardMaterial({
+      color: theme.floor,
+      emissive: theme.bloom,
+      emissiveIntensity: 1.35,
+      metalness: theme.key === 'desert' || theme.key === 'jungle' ? 0.16 : 0.58,
+      roughness: theme.key === 'ice' ? 0.12 : 0.32,
+      transparent: ['sakura', 'ice', 'void'].includes(theme.key),
+      opacity: ['sakura', 'ice', 'void'].includes(theme.key) ? 0.72 : 1,
+    });
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: theme.accent,
+      emissive: theme.accent,
+      emissiveIntensity: 1.9,
+      metalness: 0.18,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.76,
+    });
+
+    for (let index = 0; index < (this.lowPower ? 12 : 20); index += 1) {
+      const side = index % 2 ? -1 : 1;
+      const depth = -3.2 - index * 1.45;
+      const motif = new THREE.Mesh(createThemeGeometry(theme.archetype, index), index % 3 === 0 ? accentMaterial.clone() : motifMaterial.clone());
+      motif.position.set(side * (3.25 + (index % 4) * 0.54), 0.7 + (index % 6) * 0.55, depth);
+      motif.rotation.set(index * 0.17, index * 0.31, index * 0.11);
+      motif.castShadow = index < 8;
+      motif.userData.motion = 'signatureFloat';
+      motif.userData.baseY = motif.position.y;
+      motif.userData.phase = index * 0.73;
+      motif.userData.spin = index % 2 ? -1 : 1;
+      this.environmentGroup.add(motif);
+    }
+
+    const horizon = new THREE.Mesh(
+      theme.key === 'solar'
+        ? new THREE.SphereGeometry(3.2, 28, 18)
+        : new THREE.TorusGeometry(3.5, theme.key === 'void' ? 0.32 : 0.09, 10, theme.key === 'void' ? 8 : 72),
+      new THREE.MeshBasicMaterial({ color: theme.bloom, transparent: true, opacity: theme.key === 'solar' ? 0.7 : 0.5, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    horizon.position.set(0, theme.key === 'solar' ? 4.7 : 2.5, -30);
+    horizon.userData.motion = 'horizonPulse';
+    this.environmentGroup.add(horizon);
+
+    if (theme.key === 'jungle') {
+      for (let index = 0; index < 7; index += 1) {
+        const arch = new THREE.Mesh(new THREE.TorusGeometry(3.4, 0.12, 8, 36, Math.PI), motifMaterial.clone());
+        arch.rotation.z = Math.PI;
+        arch.position.set(0, 1.3, -4.5 - index * 4);
+        arch.userData.motion = 'canopyArch';
+        arch.userData.phase = index * 0.62;
+        this.environmentGroup.add(arch);
+      }
+    }
+
+    motifMaterial.dispose();
+    accentMaterial.dispose();
+
+    const particleMotion = {
+      sakura: 'petalDrift', abyss: 'bubbleRise', solar: 'flareFall', ice: 'snowFall', jungle: 'fireflyDrift', desert: 'sandDrift', void: 'glitchRain',
+    }[theme.key] || 'themeDrift';
+    this.environmentGroup.add(createParticleField({
+      count: this.lowPower ? 80 : 230,
+      color: theme.accent,
+      rangeX: 12,
+      minY: 0.15,
+      maxY: 7,
+      minZ: -36,
+      maxZ: 1,
+      size: ['sakura', 'jungle'].includes(theme.key) ? 0.052 : 0.032,
+      motion: particleMotion,
+    }));
   }
 
   _setupControllers() {
@@ -362,7 +748,7 @@ export class RhythmGame {
       controller.userData.hand = hand;
       controller.userData.saber = this._createSaber(hand);
       controller.add(controller.userData.saber);
-      controller.addEventListener('connected', (event) => {
+      const connected = (event) => {
         const reportedHand = event.data?.handedness || controller.userData.hand;
         controller.userData.hand = reportedHand;
         controller.userData.inputSource = event.data;
@@ -370,13 +756,23 @@ export class RhythmGame {
         if (state) state.hand = reportedHand;
         this.sabers.set(reportedHand, controller.userData.saber);
         this._applySaberStyle(this.damageStyle || 'voltaic');
-      });
-      controller.addEventListener('disconnected', () => {
+      };
+      const disconnected = () => {
         controller.userData.inputSource = null;
         const state = this.controllerState.get(controller);
         if (state) state.initialized = false;
-      });
-      controller.addEventListener('selectstart', () => this._queueControllerSwing(controller, hand));
+      };
+      const selectstart = () => {
+        if (this.vrMenu?.visible && this.vrMenu.select(controller)) {
+          this._pulseHaptics(controller.userData.hand || hand, 0.18, 28);
+          return;
+        }
+        this._queueControllerSwing(controller, hand);
+      };
+      controller.userData.riftHandlers = { connected, disconnected, selectstart };
+      controller.addEventListener('connected', connected);
+      controller.addEventListener('disconnected', disconnected);
+      controller.addEventListener('selectstart', selectstart);
       this.player.add(controller);
       this.controllers.push(controller);
 
@@ -398,18 +794,35 @@ export class RhythmGame {
     );
     blade.name = `${hand}-blade`;
     blade.position.y = 0.62;
+    const aura = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.052, 0.082, 1.31, 16),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: this.lowPower ? 0.18 : 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.BackSide,
+        toneMapped: false,
+      }),
+    );
+    aura.name = `${hand}-blade-aura`;
+    aura.position.y = 0.63;
     const core = new THREE.Mesh(
       new THREE.CylinderGeometry(0.01, 0.016, 1.3, 12),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
     );
     core.position.y = 0.64;
+    const light = new THREE.PointLight(color, this.lowPower ? 0.65 : 1.45, 3.2, 1.8);
+    light.name = `${hand}-blade-light`;
+    light.position.y = 0.72;
     const hilt = new THREE.Mesh(
       new THREE.CylinderGeometry(0.055, 0.07, 0.22, 16),
       new THREE.MeshStandardMaterial({ color: 0x11131d, metalness: 0.7, roughness: 0.28 }),
     );
     hilt.position.y = -0.05;
     group.rotation.x = -Math.PI / 2;
-    group.add(blade, core, hilt);
+    group.add(aura, blade, core, light, hilt);
     this.sabers.set(hand, group);
     return group;
   }
@@ -419,13 +832,23 @@ export class RhythmGame {
     for (const hand of [Hand.LEFT, Hand.RIGHT]) {
       const saber = this.sabers.get(hand);
       const blade = saber?.getObjectByName(`${hand}-blade`);
+      const aura = saber?.getObjectByName(`${hand}-blade-aura`);
+      const light = saber?.getObjectByName(`${hand}-blade-light`);
+      const color = style[hand];
       if (blade?.material) {
-        const color = style[hand];
         blade.material.color.setHex(color);
         blade.material.emissive.setHex(color);
         blade.material.emissiveIntensity = styleKey === 'ember' ? 3.15 : styleKey === 'prism' ? 2.65 : 2.9;
         blade.material.opacity = styleKey === 'prism' ? 0.72 : 0.91;
         blade.material.roughness = styleKey === 'ember' ? 0.48 : 0.18;
+      }
+      if (aura?.material) {
+        aura.material.color.setHex(color);
+        aura.material.opacity = this.lowPower ? 0.18 : styleKey === 'prism' ? 0.25 : 0.32;
+      }
+      if (light) {
+        light.color.setHex(color);
+        light.intensity = this.lowPower ? 0.65 : styleKey === 'ember' ? 1.7 : 1.45;
       }
     }
     this.damageStyle = styleKey;
@@ -433,6 +856,9 @@ export class RhythmGame {
 
   _createEnterVrButton() {
     if (!globalThis.navigator?.xr || !globalThis.document?.createElement) return;
+    // The Material 3 shell owns the primary VR CTA. Only create this compact
+    // fallback when RhythmGame is embedded without that application shell.
+    if (document.querySelector('#app, [data-action="enter-vr"]')) return;
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'webxr-entry';
@@ -445,19 +871,15 @@ export class RhythmGame {
     });
     button.addEventListener('click', async () => {
       if (this.renderer.xr.isPresenting) {
-        await this.renderer.xr.getSession()?.end?.();
+        await this.exitVR();
         return;
       }
-      const supported = await navigator.xr.isSessionSupported?.('immersive-vr').catch(() => false);
-      if (!supported) {
+      try {
+        await this.enterVR();
+      } catch {
         button.textContent = 'VR NOT FOUND';
-        return;
       }
-      const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
-      await this.renderer.xr.setSession(session);
     });
-    this.renderer.xr.addEventListener('sessionstart', this._boundSessionStart);
-    this.renderer.xr.addEventListener('sessionend', this._boundSessionEnd);
     document.body.append(button);
     this.vrButton = button;
   }
@@ -467,6 +889,86 @@ export class RhythmGame {
     this.canvas.addEventListener?.('pointermove', this._boundPointerMove);
     this.canvas.addEventListener?.('pointerdown', this._boundPointerDown);
     this.canvas.addEventListener?.('contextmenu', this._boundContextMenu);
+  }
+
+  updateTouchSaber(hand, x, y, active = true) {
+    const side = hand === Hand.RIGHT ? Hand.RIGHT : Hand.LEFT;
+    const state = this.touchSabers[side];
+    const nextX = THREE.MathUtils.clamp(Number(x) || 0, -1, 1);
+    const nextY = THREE.MathUtils.clamp(Number(y) || 0, -1, 1);
+    const dx = nextX - state.x;
+    const dy = nextY - state.y;
+    state.previousX = state.x;
+    state.previousY = state.y;
+    state.x = nextX;
+    state.y = nextY;
+    state.active = Boolean(active);
+
+    const now = this._gameTime();
+    if (state.active && this.phase === GamePhase.PLAYING && Math.hypot(dx, dy) >= 0.11 && now - (state.lastSwing || -1) >= 0.055) {
+      const lane = side === Hand.LEFT ? (nextX < 0 ? -1.5 : -0.5) : (nextX > 0 ? 1.5 : 0.5);
+      const row = nextY >= 0 ? 1 : 0;
+      this._desktopSwing(side, lane, row, vectorToCutDirection(dx, dy));
+      state.lastSwing = now;
+    }
+    return { hand: side, x: nextX, y: nextY, active: state.active };
+  }
+
+  updateMobileSaber(hand, x, y, active = true) {
+    return this.updateTouchSaber(hand, x, y, active);
+  }
+
+  moveTouchSaber(hand, x, y, active = true) {
+    return this.updateTouchSaber(hand, x, y, active);
+  }
+
+  rotateView(deltaX = 0, deltaY = 0) {
+    if (this.renderer?.xr?.isPresenting) return { ...this.viewRotation };
+    this.viewRotation.yaw = wrapAngle(this.viewRotation.yaw - (Number(deltaX) || 0) * 0.0042);
+    this.viewRotation.pitch = THREE.MathUtils.clamp(this.viewRotation.pitch - (Number(deltaY) || 0) * 0.0034, -0.62, 0.48);
+    if (this.camera) {
+      this.camera.rotation.y = this.viewRotation.yaw;
+      this.camera.rotation.x = this.viewRotation.pitch;
+    }
+    return { ...this.viewRotation };
+  }
+
+  setViewRotation(yaw = 0, pitch = 0) {
+    this.viewRotation.yaw = wrapAngle(Number(yaw) || 0);
+    this.viewRotation.pitch = THREE.MathUtils.clamp(Number(pitch) || 0, -0.62, 0.48);
+    if (this.camera && !this.renderer?.xr?.isPresenting) {
+      this.camera.rotation.y = this.viewRotation.yaw;
+      this.camera.rotation.x = this.viewRotation.pitch;
+    }
+    return { ...this.viewRotation };
+  }
+
+  resetView() {
+    return this.setViewRotation(0, 0);
+  }
+
+  async requestVRSession() {
+    if (!this.renderer) await this.initialize();
+    if (this.renderer.xr.isPresenting) return this.renderer.xr.getSession();
+    const xr = globalThis.navigator?.xr;
+    if (!xr?.requestSession) throw new Error('当前浏览器未提供 WebXR immersive-vr。');
+    const supported = await xr.isSessionSupported?.('immersive-vr').catch(() => false);
+    if (supported === false) throw new Error('当前设备不支持 immersive-vr。');
+    const session = await xr.requestSession('immersive-vr', {
+      requiredFeatures: ['local-floor'],
+      optionalFeatures: ['bounded-floor', 'hand-tracking'],
+    });
+    await this.renderer.xr.setSession(session);
+    return session;
+  }
+
+  async enterVR() {
+    return this.requestVRSession();
+  }
+
+  async exitVR() {
+    const session = this.renderer?.xr?.getSession?.();
+    if (session) await session.end?.();
   }
 
   _onPointerMove(event) {
@@ -493,8 +995,8 @@ export class RhythmGame {
       return;
     }
     const bindings = {
-      KeyQ: [Hand.LEFT, this.desktopPointer.x < 0 ? -1.5 : -0.5, this.desktopPointer.y > 0 ? 2 : 0, CutDirection.DOWN],
-      KeyE: [Hand.RIGHT, this.desktopPointer.x > 0 ? 1.5 : 0.5, this.desktopPointer.y > 0 ? 2 : 0, CutDirection.DOWN],
+      KeyQ: [Hand.LEFT, this.desktopPointer.x < 0 ? -1.5 : -0.5, this.desktopPointer.y > 0 ? 1 : 0, CutDirection.DOWN],
+      KeyE: [Hand.RIGHT, this.desktopPointer.x > 0 ? 1.5 : 0.5, this.desktopPointer.y > 0 ? 1 : 0, CutDirection.DOWN],
       KeyA: [Hand.LEFT, -1.5, 1, CutDirection.RIGHT],
       KeyS: [Hand.LEFT, -0.5, 0, CutDirection.UP],
       KeyD: [Hand.LEFT, 0.5, 0, CutDirection.DOWN],
@@ -519,6 +1021,7 @@ export class RhythmGame {
   }
 
   _queueControllerSwing(controller, fallbackHand) {
+    if (this.phase !== GamePhase.PLAYING) return;
     const state = this.controllerState.get(controller);
     if (!state) return;
     const hand = controller.userData.inputSource?.handedness || controller.userData.hand || fallbackHand;
@@ -529,15 +1032,22 @@ export class RhythmGame {
     if (this.disposed) return;
     const elapsed = this._gameTime();
     this._updateDesktopSabers();
+    if (this.vrMenu?.visible) this._updateVRMenu();
     if (this.phase === GamePhase.PLAYING) {
       this._updateControllers(elapsed);
       this._updateBeatmap(elapsed);
       this._processSweeps(elapsed);
-      this._animateWorld(elapsed);
       this._emitTick(elapsed);
     }
+    this._animateWorld(elapsed);
     this._animateDamageEffects();
-    this.renderer?.render(this.scene, this.camera);
+    this.vrHud?.animate?.();
+    if (this.renderer?.xr?.isPresenting || !this.composer) this.renderer?.render(this.scene, this.camera);
+    else this.composer.render();
+  }
+
+  _updateVRMenu() {
+    for (const controller of this.controllers) this.vrMenu.updateController(controller);
   }
 
   _gameTime() {
@@ -566,25 +1076,63 @@ export class RhythmGame {
 
   _updateDesktopSabers() {
     if (this.renderer?.xr?.isPresenting) return;
+    const elapsed = this._gameTime();
     for (const [index, controller] of this.controllers.entries()) {
       const hand = controller.userData.hand || (index === 0 ? Hand.LEFT : Hand.RIGHT);
       const pointerHand = hand === Hand.RIGHT;
-      const x = pointerHand && this.desktopPointer.active ? 0.62 + this.desktopPointer.x * 0.72 : -0.62;
-      const y = pointerHand && this.desktopPointer.active ? 1.05 + this.desktopPointer.y * 0.42 : 1.02;
-      controller.position.set(x, y, 2.15);
-      controller.rotation.set(-0.16 + (pointerHand ? this.desktopPointer.y * 0.12 : 0.08), 0, pointerHand ? -0.12 : 0.12);
+      const touch = this.touchSabers[hand];
+      let x = touch?.active
+        ? (hand === Hand.LEFT ? -0.72 : 0.72) + touch.x * 0.55
+        : pointerHand && this.desktopPointer.active ? 0.62 + this.desktopPointer.x * 0.72 : hand === Hand.LEFT ? -0.62 : 0.62;
+      let y = touch?.active ? 1.12 + touch.y * 0.5 : pointerHand && this.desktopPointer.active ? 1.05 + this.desktopPointer.y * 0.42 : 1.02;
+      let autoRotation = null;
+      if (this.mode === GAME_MODES.AUTO && this.phase === GamePhase.PLAYING) {
+        const target = [...this.runtime.active]
+          .filter((note) => note.hand === hand && note.time >= elapsed - 0.08)
+          .sort((first, second) => Math.abs(first.time - elapsed) - Math.abs(second.time - elapsed))[0];
+        if (target) {
+          const proximity = THREE.MathUtils.clamp(1 - Math.abs(target.time - elapsed) / 0.42, 0, 1);
+          const strike = proximity * proximity * (3 - 2 * proximity);
+          x = THREE.MathUtils.lerp(x, laneToX(target.lane), strike);
+          y = THREE.MathUtils.lerp(y, rowToY(target.row), strike);
+          autoRotation = directionRotationZ(target.direction) + Math.sin(proximity * Math.PI) * (hand === Hand.LEFT ? -0.32 : 0.32);
+        }
+      }
+      controller.position.set(x, y, -0.22);
+      controller.rotation.set(
+        0.58 + (touch?.active ? touch.y * 0.16 : pointerHand ? this.desktopPointer.y * 0.12 : 0),
+        0,
+        autoRotation ?? (pointerHand ? -0.12 : 0.12),
+      );
     }
   }
 
   _updateBeatmap(elapsed) {
+    if (this.mode === GAME_MODES.ZEN) {
+      this.sweepQueue.length = 0;
+      if (shouldFinishMode({ mode: this.mode, elapsed, trackDuration: this.track?.duration, runtimeComplete: false })) this._finish(false);
+      return;
+    }
     const update = this.runtime.update(elapsed);
     for (const note of update.spawned) this._spawnNoteMesh(note);
-    for (const note of update.missed) this._missNote(note, 'miss');
+    for (const note of update.missed) {
+      if (this.mode === GAME_MODES.AUTO) this._hitNote(note, autoPerfectJudgement());
+      else this._missNote(note, 'miss');
+    }
     for (const note of update.active) this._updateNoteMesh(note, elapsed);
-    if (update.complete && elapsed > 0.5) this._finish(false);
+    if (this.mode === GAME_MODES.AUTO) {
+      for (const note of [...this.runtime.active]) {
+        if (isAutoPerfectMoment(note, elapsed)) this._hitNote(note, autoPerfectJudgement());
+      }
+    }
+    if (shouldFinishMode({ mode: this.mode, elapsed, trackDuration: this.track?.duration, runtimeComplete: update.complete })) this._finish(false);
   }
 
   _processSweeps(elapsed) {
+    if (this.mode !== GAME_MODES.STANDARD) {
+      this.sweepQueue.length = 0;
+      return;
+    }
     const sweeps = this.sweepQueue.splice(0, this.sweepQueue.length);
     for (const sweep of sweeps) {
       let best = null;
@@ -595,6 +1143,15 @@ export class RhythmGame {
         } else if (['wrong-hand', 'wrong-direction'].includes(judgement.reason) && judgement.distance !== undefined && judgement.distance < this.rules.saberRadius) {
           const state = this.score.wrongCut(judgement.reason);
           this._emit(GameplayEvent.DAMAGE, { reason: judgement.reason, state });
+          this.vrHud?.flashMiss?.(judgement.reason, { redraw: false });
+          this.vrHud?.update?.({
+            time: this._gameTime(),
+            duration: this.track?.duration,
+            state,
+            mode: this.mode,
+            phase: this.phase,
+            title: this.track?.title || this.track?.name,
+          }, { force: true });
           this._flashSaber(sweep.hand, true);
           if (state.health <= 0) this._finish(true);
         }
@@ -604,13 +1161,39 @@ export class RhythmGame {
   }
 
   _spawnNoteMesh(note) {
-    const color = note.hand === Hand.LEFT ? HAND_COLORS[Hand.LEFT] : HAND_COLORS[Hand.RIGHT];
-    const material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: note.accent ? 1.8 : 1.15, roughness: 0.32, metalness: 0.08 });
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.48, 0.28), material);
+    if (this.mode === GAME_MODES.ZEN) return;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = style[note.hand] || (note.hand === Hand.LEFT ? HAND_COLORS[Hand.LEFT] : HAND_COLORS[Hand.RIGHT]);
+    const mesh = new THREE.Group();
     mesh.name = `note-${note.id}`;
     mesh.userData.noteId = note.id;
+    mesh.userData.stableRotation = true;
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.5, 0.32),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        // Preserve hand colour and arrow readability under desktop bloom.
+        emissiveIntensity: note.accent ? 1.08 : 0.74,
+        roughness: 0.28,
+        metalness: 0.12,
+      }),
+    );
+    body.name = 'note-body';
+    body.castShadow = true;
+    const rim = new THREE.LineSegments(
+      new THREE.EdgesGeometry(body.geometry, 24),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.92, toneMapped: false }),
+    );
+    rim.name = 'note-light-rim';
+    rim.scale.setScalar(1.018);
+    const glow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.54, 0.54, 0.35),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: note.accent ? 0.15 : 0.08, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide }),
+    );
+    glow.name = 'note-glow';
     const arrow = this._createDirectionArrow(note.direction || CutDirection.ANY, note.accent);
-    mesh.add(arrow);
+    mesh.add(body, rim, glow, arrow);
     this.noteGroup.add(mesh);
     this.noteMeshes.set(note.id, mesh);
     this._updateNoteMesh(note, this._gameTime());
@@ -619,39 +1202,99 @@ export class RhythmGame {
   _createDirectionArrow(direction, accent) {
     const dir = directionVector(direction) || { x: 0, y: 1 };
     const group = new THREE.Group();
-    const color = accent ? 0xffffff : 0x080510;
-    const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.32, 0.03), new THREE.MeshBasicMaterial({ color }));
-    const head = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.2, 3), new THREE.MeshBasicMaterial({ color }));
-    shaft.position.y = -0.05;
-    head.position.y = 0.16;
-    group.add(shaft, head);
-    group.position.z = 0.16;
-    group.rotation.z = Math.atan2(-dir.x, dir.y);
+    group.name = 'cut-direction';
+    group.userData.direction = direction;
+    // Beat Saber-style blocks use a high-contrast, flat symbol on the face.
+    // Only this child rotates for direction; its parent block stays perfectly
+    // front-facing for the entire approach.
+    const faceMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      depthTest: true,
+      depthWrite: false,
+      transparent: true,
+      opacity: accent ? 1 : 0.94,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    const outlineMaterial = new THREE.MeshBasicMaterial({
+      color: 0x070914,
+      depthTest: true,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.88,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+    if (direction === CutDirection.ANY) {
+      const outline = new THREE.Mesh(new THREE.CircleGeometry(0.13, 24), outlineMaterial);
+      outline.position.z = -0.002;
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(0.095, 24), faceMaterial);
+      dot.position.z = 0.002;
+      dot.name = 'any-direction-dot';
+      group.add(outline, dot);
+    } else {
+      const geometry = createCutArrowGeometry();
+      const outline = new THREE.Mesh(geometry, outlineMaterial);
+      outline.scale.setScalar(1.24);
+      outline.position.z = -0.002;
+      const arrow = new THREE.Mesh(geometry, faceMaterial);
+      arrow.scale.setScalar(0.92);
+      arrow.position.z = 0.002;
+      arrow.name = 'direction-arrow-face';
+      group.add(outline, arrow);
+    }
+    group.position.z = 0.172;
+    group.rotation.z = directionRotationZ(direction, dir);
     return group;
   }
 
   _updateNoteMesh(note, elapsed) {
     const mesh = this.noteMeshes.get(note.id);
     if (!mesh) return;
-    const pos = noteWorldPosition(note, elapsed, this.rules);
+    const { position: pos, rotation } = noteVisualTransform(note, elapsed, this.rules);
     mesh.position.set(pos.x, pos.y, pos.z);
+    mesh.rotation.set(rotation.x, rotation.y, rotation.z);
     if (!this.reducedMotion) {
-      mesh.rotation.z += 0.012 * (note.hand === Hand.LEFT ? 1 : -1);
       mesh.scale.setScalar(1 + Math.sin(elapsed * 9 + note.time) * 0.025);
     }
   }
 
   _hitNote(note, judgement) {
+    const hitPosition = this.noteMeshes.get(note.id)?.position?.clone?.() || new THREE.Vector3(laneToX(note.lane), rowToY(note.row), NOTE_PLANE_Z);
     this.runtime.resolve(note.id);
     this._removeNoteMesh(note.id);
     const result = this.score.hit(note, judgement);
-    this._flashSaber(note.hand, false);
+    this._spawnHitEffect(hitPosition, note.hand, Boolean(note.accent || judgement?.automatic));
+    this._spawnImpactRing(hitPosition, note.hand, Boolean(note.accent || judgement?.automatic));
+    this._spawnSplitShards(hitPosition, note.hand, Boolean(note.accent || judgement?.automatic));
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    this.vrHud?.flashHit?.({ noteScore: result.noteScore, judgement, hand: note.hand, color: style[note.hand] }, { redraw: false });
+    this.vrHud?.update?.({
+      time: this._gameTime(),
+      duration: this.track?.duration,
+      state: result.state,
+      mode: this.mode,
+      phase: this.phase,
+      title: this.track?.title || this.track?.name,
+    });
+    this._flashSaber(note.hand, false, { accent: Boolean(note.accent), automatic: Boolean(judgement?.automatic) });
     this._emit(GameplayEvent.NOTE_HIT, { note: publicNote(note), judgement, noteScore: result.noteScore, state: result.state });
   }
 
   _missNote(note, reason) {
     this._removeNoteMesh(note.id);
     const state = this.score.miss(reason);
+    this.vrHud?.flashMiss?.(reason, { redraw: false });
+    this.vrHud?.update?.({
+      time: this._gameTime(),
+      duration: this.track?.duration,
+      state,
+      mode: this.mode,
+      phase: this.phase,
+      title: this.track?.title || this.track?.name,
+    }, { force: true });
     this._emit(GameplayEvent.NOTE_MISS, { note: publicNote(note), reason, state });
     this._emit(GameplayEvent.DAMAGE, { reason, state });
     this._flashSaber(note.hand, true);
@@ -660,14 +1303,15 @@ export class RhythmGame {
 
   _finish(failed) {
     if (this.phase === GamePhase.RESULTS) return;
+    const finalTime = this._gameTime();
     this.music?.stop?.();
     this.clock.stop();
-    this._setPhase(GamePhase.RESULTS);
-    const results = this.score.results(this.beatmap.length);
-    this._emit(GameplayEvent.RESULTS, { ...results, failed });
+    this._setPhase(GamePhase.RESULTS, finalTime);
+    const results = this.score.results(this.mode === GAME_MODES.ZEN ? 0 : this.beatmap.length);
+    this._emit(GameplayEvent.RESULTS, { ...results, failed, mode: this.mode });
   }
 
-  _flashSaber(hand, hurt) {
+  _flashSaber(hand, hurt, { accent = false, automatic = false } = {}) {
     const saber = this.sabers.get(hand);
     if (!saber) return;
     const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
@@ -678,20 +1322,44 @@ export class RhythmGame {
     blade.material.emissive.setHex(color);
     if (!this.reducedMotion) {
       saber.scale.setScalar(hurt ? 1.16 : 1.08);
-      setTimeout(() => saber.scale.setScalar(1), 90);
+      const timer = setTimeout(() => {
+        this.pendingTimers.delete(timer);
+        if (!this.disposed) saber.scale.setScalar(1);
+      }, 90);
+      this.pendingTimers.add(timer);
     }
-    this._pulseHaptics(hand, hurt ? 0.72 : 0.28, hurt ? 90 : 34);
+    const haptics = createHapticProfile({ hurt, accent, automatic, lowPower: this.lowPower });
+    this._pulseHaptics(hand, haptics.intensity, haptics.duration);
     if (hurt) this._spawnDamageEffect(hand);
   }
 
   _animateWorld(elapsed) {
     const motionScale = this.reducedMotion ? 0.12 : 1;
+    const bpm = Math.max(60, Number(this.track?.bpm) || 120);
+    const beatPhase = (elapsed * bpm) / 60;
+    const beatFraction = beatPhase - Math.floor(beatPhase);
+    const beatPulse = Math.exp(-beatFraction * 7.2);
+    const barWave = 0.5 + 0.5 * Math.sin((beatPhase / 4) * Math.PI * 2);
+    if (this.worldLights) {
+      this.worldLights.leftRim.intensity = 11 + beatPulse * 15 * motionScale;
+      this.worldLights.rightRim.intensity = 11 + (beatPulse * 12 + barWave * 3) * motionScale;
+      this.worldLights.beatLight.intensity += (8 + beatPulse * 17 - this.worldLights.beatLight.intensity) * 0.16;
+      this.worldLights.key.intensity = 1.7 + beatPulse * 0.9 * motionScale;
+    }
+    if (this.scene?.fog?.isFogExp2) this.scene.fog.density = 0.032 + (1 - beatPulse) * 0.006;
+    if (this.bloomPass) this.bloomPass.strength = 0.7 + beatPulse * 0.34 * motionScale;
     this.environmentGroup.children.forEach((object, index) => {
       const motion = object.userData?.motion;
       const phase = object.userData?.phase || index * 0.31;
       if (motion === 'warpGate') object.rotation.z = Math.sin(elapsed * 0.7 + phase) * 0.12 * motionScale;
       if (motion === 'equalizer') object.scale.y = 0.72 + (0.28 + Math.sin(elapsed * 5.5 + phase) * 0.18) * motionScale;
       if (motion === 'floorPulse' && object.material) object.material.emissiveIntensity = 0.12 + (0.1 + Math.sin(elapsed * 2.1) * 0.05) * motionScale;
+      if (motion === 'skyBreath' && object.material?.color) object.material.color.copy(object.userData.baseColor).lerp(object.userData.pulseColor, (0.08 + beatPulse * 0.1) * motionScale);
+      if (motion === 'laneRail' && object.material) object.material.opacity = 0.26 + beatPulse * 0.4 * motionScale;
+      if (motion === 'hitGate') {
+        object.scale.x = 1 + beatPulse * 0.07 * motionScale;
+        if (object.material) object.material.opacity = 0.42 + beatPulse * 0.48 * motionScale;
+      }
       if (motion === 'piston') object.position.y = object.userData.baseY + Math.sin(elapsed * 1.8 + phase) * 0.58 * motionScale;
       if (motion === 'furnace' && object.material) object.material.emissiveIntensity = 1.5 + (0.9 + Math.sin(elapsed * 4.2 + phase) * 0.55) * motionScale;
       if (motion === 'lavaSeam' && object.material) object.material.emissiveIntensity = 1.2 + (1.1 + Math.sin(elapsed * 3.4 + phase) * 0.7) * motionScale;
@@ -703,6 +1371,21 @@ export class RhythmGame {
         object.rotation.x += 0.005 * motionScale;
         object.rotation.y -= 0.007 * motionScale;
         object.position.y = object.userData.baseY + Math.sin(elapsed * 1.2 + phase) * 0.32 * motionScale;
+      }
+      if (motion === 'signatureFloat') {
+        object.position.y = object.userData.baseY + Math.sin(elapsed * 0.72 + phase) * 0.26 * motionScale;
+        object.rotation.y += 0.0022 * object.userData.spin * motionScale;
+        object.rotation.z += 0.0011 * object.userData.spin * motionScale;
+        if (object.material) object.material.emissiveIntensity = 0.85 + beatPulse * 1.15 * motionScale;
+      }
+      if (motion === 'horizonPulse') {
+        const scale = 1 + beatPulse * 0.045 * motionScale;
+        object.scale.setScalar(scale);
+        if (object.material) object.material.opacity = 0.38 + beatPulse * 0.4 * motionScale;
+      }
+      if (motion === 'canopyArch') {
+        object.rotation.y = Math.sin(elapsed * 0.32 + phase) * 0.08 * motionScale;
+        if (object.material) object.material.emissiveIntensity = 0.7 + beatPulse * 0.85 * motionScale;
       }
       if (object.isPoints) animateParticleField(object, motion, motionScale);
     });
@@ -720,11 +1403,106 @@ export class RhythmGame {
     }
   }
 
+  _spawnHitEffect(base, hand, accent = false) {
+    if (!this.scene || this.reducedMotion) return;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const count = this.lowPower ? 8 : accent ? 34 : 20;
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const velocities = [];
+    const colorA = new THREE.Color(style[hand]);
+    const colorB = new THREE.Color(accent ? 0xffffff : style.hurt);
+    for (let index = 0; index < count; index += 1) {
+      positions[index * 3] = base.x;
+      positions[index * 3 + 1] = base.y;
+      positions[index * 3 + 2] = base.z;
+      const color = index % 3 ? colorA : colorB;
+      colors[index * 3] = color.r;
+      colors[index * 3 + 1] = color.g;
+      colors[index * 3 + 2] = color.b;
+      const angle = (index / count) * Math.PI * 2 + Math.random() * 0.3;
+      const speed = (accent ? 2.7 : 1.8) * (0.65 + Math.random() * 0.5);
+      velocities.push(new THREE.Vector3(Math.cos(angle) * speed, Math.sin(angle) * speed, (Math.random() - 0.5) * 1.7));
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const points = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({ size: accent ? 0.08 : 0.055, vertexColors: true, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    const now = performance.now() / 1000;
+    points.userData = { born: now, last: now, velocities, styleKey: this.damageStyle || 'voltaic', motion: style.motion, kind: 'hit', lifetime: accent ? 0.54 : 0.4 };
+    this.scene.add(points);
+    this.damageEffects.push(points);
+    if (this.worldLights?.beatLight) this.worldLights.beatLight.intensity += accent ? 18 : 8;
+  }
+
+  _spawnImpactRing(base, hand, accent = false) {
+    if (!this.scene || this.reducedMotion) return;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = style[hand] || HAND_COLORS[hand] || 0xffffff;
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(accent ? 0.22 : 0.18, accent ? 0.285 : 0.235, this.lowPower ? 24 : 48),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: accent ? 0.96 : 0.78,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    ring.name = 'hit-impact-ring';
+    ring.position.copy(base);
+    ring.position.z += 0.055;
+    ring.renderOrder = 20;
+    const now = performance.now() / 1000;
+    ring.userData = { born: now, last: now, kind: 'impact-ring', lifetime: accent ? 0.46 : 0.34, accent };
+    this.scene.add(ring);
+    this.damageEffects.push(ring);
+  }
+
+  _spawnSplitShards(base, hand, accent = false) {
+    if (!this.scene || this.reducedMotion) return;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = style[hand] || HAND_COLORS[hand] || 0xffffff;
+    const count = this.lowPower ? 2 : accent ? 6 : 4;
+    const group = new THREE.Group();
+    group.name = 'hit-split-shards';
+    group.position.copy(base);
+    group.position.z += 0.035;
+    const geometry = new THREE.TetrahedronGeometry(accent ? 0.15 : 0.115, 0);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: accent ? 0.9 : 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    for (let index = 0; index < count; index += 1) {
+      const angle = (index / count) * Math.PI * 2 + (hand === Hand.LEFT ? 0.18 : -0.18);
+      const speed = (accent ? 2.15 : 1.55) * (0.82 + (index % 3) * 0.12);
+      const shard = new THREE.Mesh(geometry, material);
+      shard.position.set(Math.cos(angle) * 0.08, Math.sin(angle) * 0.08, index % 2 ? 0.025 : -0.015);
+      shard.rotation.set(angle * 0.35, angle * 0.65, angle);
+      shard.userData.velocity = new THREE.Vector3(Math.cos(angle) * speed, Math.sin(angle) * speed, (index % 2 ? 1 : -1) * 0.34);
+      shard.userData.spin = new THREE.Vector3(4.2 + index * 0.25, 3.5 + index * 0.18, (index % 2 ? -1 : 1) * 5.4);
+      group.add(shard);
+    }
+    const now = performance.now() / 1000;
+    group.userData = { born: now, last: now, kind: 'split-shards', lifetime: accent ? 0.52 : 0.4 };
+    this.scene.add(group);
+    this.damageEffects.push(group);
+  }
+
   _spawnDamageEffect(hand) {
     if (!this.scene || this.reducedMotion) return;
     const styleKey = this.damageStyle || 'voltaic';
     const style = DAMAGE_STYLES[styleKey] || DAMAGE_STYLES.voltaic;
-    const count = styleKey === 'ember' ? 26 : styleKey === 'prism' ? 22 : 18;
+    const count = this.lowPower ? 10 : ['embers', 'sand', 'petal'].includes(style.motion) ? 28 : 22;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const velocities = [];
@@ -741,7 +1519,7 @@ export class RhythmGame {
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
       colors[index * 3 + 2] = color.b;
-      const spread = styleKey === 'voltaic' ? 2.2 : styleKey === 'prism' ? 1.45 : 1.05;
+      const spread = ['electric', 'glitch', 'flare'].includes(style.motion) ? 2.2 : ['prism', 'shard'].includes(style.motion) ? 1.5 : 1.08;
       velocities.push(new THREE.Vector3((Math.random() - 0.5) * spread, (Math.random() * 0.9 + 0.25) * spread, (Math.random() - 0.5) * spread));
     }
     const geometry = new THREE.BufferGeometry();
@@ -749,9 +1527,10 @@ export class RhythmGame {
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     const points = new THREE.Points(
       geometry,
-      new THREE.PointsMaterial({ size: styleKey === 'ember' ? 0.07 : styleKey === 'prism' ? 0.09 : 0.055, vertexColors: true, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending }),
+      new THREE.PointsMaterial({ size: ['embers', 'sand', 'petal'].includes(style.motion) ? 0.07 : ['prism', 'shard'].includes(style.motion) ? 0.09 : 0.055, vertexColors: true, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending }),
     );
-    points.userData = { born: performance.now() / 1000, last: performance.now() / 1000, velocities, styleKey };
+    const now = performance.now() / 1000;
+    points.userData = { born: now, last: now, velocities, styleKey, motion: style.motion, kind: 'damage', lifetime: 0.72 };
     this.scene.add(points);
     this.damageEffects.push(points);
   }
@@ -762,24 +1541,56 @@ export class RhythmGame {
       const age = now - effect.userData.born;
       const delta = Math.min(0.034, now - effect.userData.last);
       effect.userData.last = now;
+      const lifetime = effect.userData.lifetime || 0.72;
+      const progress = THREE.MathUtils.clamp(age / lifetime, 0, 1);
+      if (effect.userData.kind === 'impact-ring') {
+        const scale = 0.78 + progress * (effect.userData.accent ? 3.4 : 2.7);
+        effect.scale.setScalar(scale);
+        effect.rotation.z += delta * (effect.userData.accent ? 2.8 : 1.8);
+        effect.material.opacity = Math.max(0, (effect.userData.accent ? 0.96 : 0.78) * (1 - progress));
+        if (age >= lifetime) this._removeDamageEffect(effect);
+        continue;
+      }
+      if (effect.userData.kind === 'split-shards') {
+        for (const shard of effect.children) {
+          shard.position.addScaledVector(shard.userData.velocity, delta);
+          shard.userData.velocity.y -= 1.15 * delta;
+          shard.rotation.x += shard.userData.spin.x * delta;
+          shard.rotation.y += shard.userData.spin.y * delta;
+          shard.rotation.z += shard.userData.spin.z * delta;
+          shard.scale.setScalar(Math.max(0.05, 1 - progress * 0.72));
+          shard.material.opacity = Math.max(0, 0.82 * (1 - progress));
+        }
+        if (age >= lifetime) this._removeDamageEffect(effect);
+        continue;
+      }
       const positions = effect.geometry.attributes.position;
       for (let index = 0; index < effect.userData.velocities.length; index += 1) {
         const velocity = effect.userData.velocities[index];
-        if (effect.userData.styleKey === 'ember') velocity.y -= 1.7 * delta;
+        if (['embers', 'sand', 'leaf', 'petal'].includes(effect.userData.motion)) velocity.y -= 1.7 * delta;
+        if (effect.userData.motion === 'bubble') velocity.y += 0.55 * delta;
+        if (effect.userData.motion === 'glitch' && index % 3 === 0) velocity.x *= -1;
         positions.array[index * 3] += velocity.x * delta;
         positions.array[index * 3 + 1] += velocity.y * delta;
         positions.array[index * 3 + 2] += velocity.z * delta;
       }
       positions.needsUpdate = true;
-      effect.material.opacity = Math.max(0, 1 - age / 0.72);
-      if (age >= 0.72) this._removeDamageEffect(effect);
+      effect.material.opacity = Math.max(0, 1 - age / lifetime);
+      if (age >= lifetime) this._removeDamageEffect(effect);
     }
   }
 
   _removeDamageEffect(effect) {
     this.scene?.remove(effect);
-    effect.geometry?.dispose?.();
-    effect.material?.dispose?.();
+    const geometries = new Set();
+    const materials = new Set();
+    effect.traverse?.((object) => {
+      if (object.geometry) geometries.add(object.geometry);
+      if (Array.isArray(object.material)) object.material.forEach((material) => materials.add(material));
+      else if (object.material) materials.add(object.material);
+    });
+    geometries.forEach((geometry) => geometry.dispose?.());
+    materials.forEach((material) => material.dispose?.());
     this.damageEffects = this.damageEffects.filter((candidate) => candidate !== effect);
   }
 
@@ -787,14 +1598,37 @@ export class RhythmGame {
     for (const effect of [...this.damageEffects]) this._removeDamageEffect(effect);
   }
 
-  _setPhase(phase) {
+  _setPhase(phase, at = this._gameTime()) {
     this.phase = phase;
-    const state = this.score.setPhase(phase, this._gameTime());
-    this._emit(GameplayEvent.PHASE, { phase, state });
+    const state = this.score.setPhase(phase, at);
+    this.vrHud?.update?.({
+      time: at,
+      duration: this.track?.duration,
+      state,
+      mode: this.mode,
+      phase,
+      title: this.track?.title || this.track?.name,
+    }, { force: true });
+    this._emit(GameplayEvent.PHASE, { phase, state, mode: this.mode });
   }
 
   _emitTick(time) {
-    this._emit(GameplayEvent.TICK, { time, activeNotes: this.runtime.active.map(publicNote), state: this.score.snapshot(), trackId: this.track?.id || null });
+    const state = this.score.snapshot();
+    this.vrHud?.update?.({
+      time,
+      duration: this.track?.duration,
+      state,
+      mode: this.mode,
+      phase: this.phase,
+      title: this.track?.title || this.track?.name,
+    });
+    this._emit(GameplayEvent.TICK, {
+      time,
+      activeNotes: this.mode === GAME_MODES.ZEN ? [] : this.runtime.active.map(publicNote),
+      state,
+      trackId: this.track?.id || null,
+      mode: this.mode,
+    });
   }
 
   _emit(type, detail) {
@@ -807,8 +1641,7 @@ export class RhythmGame {
     this.noteGroup.remove(mesh);
     mesh.traverse((object) => {
       object.geometry?.dispose?.();
-      if (Array.isArray(object.material)) object.material.forEach((m) => m.dispose?.());
-      else object.material?.dispose?.();
+      disposeMaterial(object.material);
     });
     this.noteMeshes.delete(noteId);
   }
@@ -820,9 +1653,9 @@ export class RhythmGame {
 }
 
 export function createBeatmapFromTrack(track) {
-  if (Array.isArray(track?.beatmap)) return track.beatmap;
-  if (Array.isArray(track?.notes)) return track.notes;
-  if (track?.id && getTrack(track.id)) return createBeatmap(track);
+  if (Array.isArray(track?.beatmap)) return track.beatmap.map((note, index) => normalizeGameNote(note, index, track?.id));
+  if (Array.isArray(track?.notes)) return track.notes.map((note, index) => normalizeGameNote(note, index, track?.id));
+  if (track?.id && getTrack(track.id)) return createBeatmap(track).map((note, index) => normalizeGameNote(note, index, track.id));
   const bpm = Number(track?.bpm) || 120;
   const duration = Math.max(20, Math.min(Number(track?.duration) || 72, 240));
   const beat = 60 / bpm;
@@ -840,7 +1673,7 @@ export function createBeatmapFromTrack(track) {
       id: `${track?.id || 'track'}-${index}`,
       time: Number(time.toFixed(3)),
       lane,
-      row: index % 3,
+      row: index % NOTE_ROW_COUNT,
       hand,
       direction: directions[index % directions.length],
       accent: index % 8 === 0,
@@ -850,14 +1683,143 @@ export function createBeatmapFromTrack(track) {
   return notes;
 }
 
+export function normalizeGameNote(note, index = 0, trackId = 'track') {
+  const lanes = [-1.5, -0.5, 0.5, 1.5];
+  const laneValue = Number(note?.lane);
+  const lane = lanes.reduce((closest, candidate) => (Math.abs(candidate - laneValue) < Math.abs(closest - laneValue) ? candidate : closest), lanes[0]);
+  const row = Math.max(0, Math.min(NOTE_ROW_COUNT - 1, Math.round(Number(note?.row) || 0)));
+  const direction = note?.direction === CutDirection.ANY || directionVector(note?.direction) ? note?.direction : CutDirection.ANY;
+  const normalized = {
+    ...note,
+    id: note?.id || `${trackId || 'track'}-${index}`,
+    lane,
+    row,
+    hand: note?.hand === Hand.RIGHT ? Hand.RIGHT : Hand.LEFT,
+    direction,
+  };
+  // Preserve authored object shape for deterministic track integration. A
+  // missing accent and an explicit false accent behave identically at runtime.
+  if (Object.prototype.hasOwnProperty.call(note || {}, 'accent')) normalized.accent = Boolean(note.accent);
+  return normalized;
+}
+
+export function directionRotationZ(direction, vector = directionVector(direction) || { x: 0, y: 1 }) {
+  if (direction === CutDirection.ANY) return 0;
+  return Math.atan2(-vector.x, vector.y);
+}
+
+export function noteVisualTransform(note, elapsed, rules = DEFAULT_RULES) {
+  const normalized = normalizeGameNote(note);
+  return {
+    position: noteWorldPosition(normalized, elapsed, rules),
+    // Direction is encoded exclusively by the front-face arrow. Flying notes do
+    // not roll, yaw, or spin, so the instruction remains readable at all times.
+    rotation: { x: 0, y: 0, z: 0 },
+    arrowRotationZ: directionRotationZ(normalized.direction),
+  };
+}
+
+export function approachDistanceFromViewer(viewerZ = 0) {
+  return Math.abs((Number(viewerZ) || 0) - NOTE_PLANE_Z);
+}
+
+export function vectorToCutDirection(x, y) {
+  const angle = Math.atan2(Number(y) || 0, Number(x) || 0);
+  const octant = Math.round(angle / (Math.PI / 4));
+  return ({
+    0: CutDirection.RIGHT,
+    1: CutDirection.UP_RIGHT,
+    2: CutDirection.UP,
+    3: CutDirection.UP_LEFT,
+    4: CutDirection.LEFT,
+    '-4': CutDirection.LEFT,
+    '-3': CutDirection.DOWN_LEFT,
+    '-2': CutDirection.DOWN,
+    '-1': CutDirection.DOWN_RIGHT,
+  })[octant] || CutDirection.UP;
+}
+
+export function autoPerfectJudgement() {
+  return { ok: true, reason: 'auto-perfect', timing: 0, distance: 0, alignment: 1, automatic: true, quality: 'perfect' };
+}
+
+export function isAutoPerfectMoment(note, elapsed) {
+  return Number.isFinite(Number(note?.time)) && Number(elapsed) >= Number(note.time);
+}
+
+export function shouldFinishMode({ mode, elapsed, trackDuration, runtimeComplete } = {}) {
+  const normalizedMode = normalizeGameMode(mode);
+  const time = Math.max(0, Number(elapsed) || 0);
+  if (normalizedMode === GAME_MODES.ZEN) {
+    // Pure-enjoyment mode is driven by the full audio duration rather than an
+    // intentionally empty BeatmapRuntime, so it can never end after 0.5 s.
+    return time >= Math.max(1, Number(trackDuration) || 72);
+  }
+  return Boolean(runtimeComplete) && time > 0.5;
+}
+
+function createCutArrowGeometry() {
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.055, -0.17);
+  shape.lineTo(0.055, -0.17);
+  shape.lineTo(0.055, 0.025);
+  shape.lineTo(0.14, 0.025);
+  shape.lineTo(0, 0.19);
+  shape.lineTo(-0.14, 0.025);
+  shape.lineTo(-0.055, 0.025);
+  shape.closePath();
+  const geometry = new THREE.ShapeGeometry(shape);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function wrapAngle(value) {
+  const twoPi = Math.PI * 2;
+  return ((value + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
+}
+
+function createThemeGeometry(archetype, index) {
+  const size = 0.16 + (index % 5) * 0.045;
+  if (archetype === 'petals') {
+    const geometry = new THREE.CircleGeometry(size * 1.6, 5);
+    geometry.scale(0.55, 1.5, 1);
+    return geometry;
+  }
+  if (archetype === 'depth') return new THREE.TorusGeometry(size * 1.6, 0.035, 6, 24);
+  if (archetype === 'sun') return index % 3 === 0 ? new THREE.TorusGeometry(size * 2, 0.045, 7, 28) : new THREE.IcosahedronGeometry(size, 0);
+  if (archetype === 'crystal') {
+    const geometry = new THREE.OctahedronGeometry(size, 0);
+    geometry.scale(0.72, 2.4, 0.72);
+    return geometry;
+  }
+  if (archetype === 'canopy') return index % 2 ? new THREE.IcosahedronGeometry(size * 1.4, 0) : new THREE.TorusGeometry(size * 1.5, 0.055, 6, 18);
+  if (archetype === 'dunes') {
+    const geometry = new THREE.ConeGeometry(size * 1.5, size * 3.4, 4);
+    geometry.rotateZ(Math.PI / 2);
+    return geometry;
+  }
+  if (archetype === 'digital') return index % 2 ? new THREE.BoxGeometry(size, size * 2.6, size) : new THREE.TetrahedronGeometry(size * 1.3, 0);
+  return new THREE.DodecahedronGeometry(size, 0);
+}
+
 function clearGroup(group) {
   while (group.children.length) {
-    const object = group.children.pop();
+    const object = group.children[group.children.length - 1];
+    group.remove(object);
     object.traverse?.((child) => {
       child.geometry?.dispose?.();
-      if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose?.());
-      else child.material?.dispose?.();
+      disposeMaterial(child.material);
     });
+  }
+}
+
+function disposeMaterial(material) {
+  const materials = Array.isArray(material) ? material : material ? [material] : [];
+  for (const candidate of materials) {
+    for (const value of Object.values(candidate)) {
+      if (value?.isTexture) value.dispose?.();
+    }
+    candidate.dispose?.();
   }
 }
 
@@ -877,22 +1839,37 @@ function pickDamageStyle(seed = '') {
 
 function resolveTheme(track) {
   if (TRACK_THEME[track?.id]) return TRACK_THEME[track.id];
-  if (typeof track?.environment === 'string' && THEME_PRESETS[track.environment]) return track.environment;
-  const biome = String(track?.environment?.biome || track?.environment?.name || '').toLowerCase();
+  const aliases = { 'neon-ocean': 'neon', 'ember-forge': 'magma', 'glass-orbit': 'orbit', forge: 'magma', glacier: 'ice' };
+  const declared = typeof track?.environment === 'string'
+    ? track.environment
+    : track?.environment?.theme || track?.environment?.key || track?.environment?.biome || track?.environment?.name;
+  const declaredKey = String(declared || '').toLowerCase();
+  if (THEME_PRESETS[declaredKey]) return declaredKey;
+  if (aliases[declaredKey]) return aliases[declaredKey];
+  const biome = String(track?.environment?.biome || track?.environment?.name || declared || '').toLowerCase();
   if (/forge|furnace|magma|熔|炉/.test(biome)) return 'magma';
   if (/orbit|glass|rain|crystal|轨|晶/.test(biome)) return 'orbit';
   if (/neon|causeway|tide|霓虹|星港/.test(biome)) return 'neon';
+  if (/sakura|cherry|petal|樱/.test(biome)) return 'sakura';
+  if (/abyss|deep|trench|深渊|海沟/.test(biome)) return 'abyss';
+  if (/solar|sun|helios|日曜|太阳/.test(biome)) return 'solar';
+  if (/ice|cryo|frost|glacier|冰|霜/.test(biome)) return 'ice';
+  if (/jungle|jade|canopy|forest|雨林|翡翠/.test(biome)) return 'jungle';
+  if (/desert|dune|sand|沙|荒漠/.test(biome)) return 'desert';
+  if (/void|pixel|digital|虚空|像素/.test(biome)) return 'void';
   return pickTheme(track?.id);
 }
 
 function resolveDamageStyle(track) {
   if (TRACK_DAMAGE[track?.id]) return TRACK_DAMAGE[track.id];
   if (typeof track?.damageStyle === 'string' && DAMAGE_STYLES[track.damageStyle]) return track.damageStyle;
+  const declared = String(track?.damageStyle?.key || track?.damageStyle?.theme || '').toLowerCase();
+  if (DAMAGE_STYLES[declared]) return declared;
   const name = String(track?.damageStyle?.name || '').toLowerCase();
   if (/molten|ember|heat|熔|烬/.test(name)) return 'ember';
   if (/crystal|prism|glass|晶|棱/.test(name)) return 'prism';
   if (/static|electric|surf|电|浪/.test(name)) return 'voltaic';
-  return pickDamageStyle(track?.id);
+  return THEME_DAMAGE[resolveTheme(track)] || pickDamageStyle(track?.id);
 }
 
 function createParticleField({ count, color, rangeX, minY, maxY, minZ, maxZ, size, motion }) {
@@ -920,20 +1897,29 @@ function animateParticleField(points, motion, motionScale) {
   if (!bounds) return;
   for (let index = 0; index < attribute.count; index += 1) {
     const offset = index * 3;
-    if (motion === 'embers') {
-      attribute.array[offset + 1] += 0.012 * motionScale * (1 + (index % 5) * 0.1);
-      attribute.array[offset] += Math.sin(index * 1.7 + attribute.array[offset + 1]) * 0.0018 * motionScale;
+    const phase = index * 1.618 + attribute.array[offset + 2] * 0.12;
+    if (['embers', 'bubbleRise', 'fireflyDrift'].includes(motion)) {
+      const speed = motion === 'bubbleRise' ? 0.008 : motion === 'fireflyDrift' ? 0.004 : 0.012;
+      attribute.array[offset + 1] += speed * motionScale * (1 + (index % 5) * 0.1);
+      attribute.array[offset] += Math.sin(phase + attribute.array[offset + 1]) * (motion === 'fireflyDrift' ? 0.006 : 0.0018) * motionScale;
+      if (motion === 'fireflyDrift') attribute.array[offset + 2] += Math.cos(phase) * 0.003 * motionScale;
       if (attribute.array[offset + 1] > bounds.maxY) {
         attribute.array[offset + 1] = bounds.minY;
         attribute.array[offset + 2] = bounds.minZ + Math.random() * (bounds.maxZ - bounds.minZ);
       }
     } else {
-      const speed = motion === 'prismRain' ? 0.038 : 0.052;
+      const speeds = { prismRain: 0.038, petalDrift: 0.014, snowFall: 0.012, sandDrift: 0.008, glitchRain: 0.07, flareFall: 0.024 };
+      const speed = speeds[motion] || 0.052;
       attribute.array[offset + 1] -= speed * motionScale;
-      attribute.array[offset + 2] += (motion === 'prismRain' ? 0.026 : 0.018) * motionScale;
+      attribute.array[offset + 2] += (motion === 'prismRain' ? 0.026 : motion === 'glitchRain' ? 0.045 : 0.018) * motionScale;
+      if (motion === 'petalDrift') attribute.array[offset] += Math.sin(phase + attribute.array[offset + 1]) * 0.008 * motionScale;
+      if (motion === 'snowFall') attribute.array[offset] += Math.cos(phase + attribute.array[offset + 1]) * 0.0022 * motionScale;
+      if (motion === 'sandDrift') attribute.array[offset] += 0.018 * motionScale;
+      if (motion === 'glitchRain' && index % 5 === 0) attribute.array[offset] += (index % 2 ? -0.018 : 0.018) * motionScale;
       if (attribute.array[offset + 1] < bounds.minY || attribute.array[offset + 2] > bounds.maxZ) {
         attribute.array[offset + 1] = bounds.maxY;
         attribute.array[offset + 2] = bounds.minZ + Math.random() * 4;
+        if (motion === 'sandDrift') attribute.array[offset] = -bounds.rangeX / 2;
       }
     }
   }

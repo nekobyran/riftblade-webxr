@@ -1,10 +1,10 @@
 {
-  "name": "RIFT//BLADE 光痕裂界",
-  "short_name": "RIFT//BLADE",
-  "description": "An original three-world WebXR rhythm blade experience.",
+  "name": "RIFT//BLADE 2.0 光痕裂界",
+  "short_name": "RIFT BLADE",
+  "description": "Ten original worlds, custom music beatmaps and dual-blade Three.js WebXR rhythm action.",
   "start_url": "./",
   "display": "fullscreen",
-  "orientation": "landscape",
+  "orientation": "any",
   "background_color": "#05070d",
   "theme_color": "#05070d",
   "icons": [

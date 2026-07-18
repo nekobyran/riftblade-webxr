@@ -20,6 +20,16 @@ export const GamePhase = Object.freeze({
   RESULTS: 'results',
 });
 
+export const GameMode = Object.freeze({
+  STANDARD: 'standard',
+  AUTO: 'auto',
+  ZEN: 'zen',
+});
+
+export function normalizeGameMode(value) {
+  return Object.values(GameMode).includes(value) ? value : GameMode.STANDARD;
+}
+
 export const GameplayEvent = Object.freeze({
   TICK: 'game:tick',
   NOTE_HIT: 'game:note-hit',
@@ -28,4 +38,9 @@ export const GameplayEvent = Object.freeze({
   PHASE: 'game:phase',
   RESULTS: 'game:results',
   XR_CHANGE: 'game:xr-change',
+  MODE_CHANGE: 'game:mode-change',
+  TRACK_SELECT: 'game:track-select',
+  VR_MENU: 'game:vr-menu',
+  CUSTOM_TRACK: 'game:custom-track',
+  AUDIO_ANALYSIS: 'game:audio-analysis',
 });

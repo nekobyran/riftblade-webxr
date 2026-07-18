@@ -6,9 +6,8 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
-    // Three.js + WebXR controller models are intentionally kept together so
-    // headset startup does not cross a lazy-chunk boundary. The gzip payload
-    // remains below 180 kB.
+    // Three.js + the WebXR gameplay core stay together so headset startup does
+    // not cross a lazy-chunk boundary; desktop-only bloom remains lazy-loaded.
     chunkSizeWarningLimit: 700,
     outDir: process.env.RIFTBLADE_OUT_DIR || 'dist',
     emptyOutDir: true,

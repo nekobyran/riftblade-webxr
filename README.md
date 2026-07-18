@@ -1,37 +1,75 @@
-# RIFT//BLADE 光痕裂界
+# RIFT//BLADE 2.0 光痕裂界
 
-一款完全原创、无需后端即可运行的 WebXR 双剑节奏游戏。三首程序化曲目、三套实时动态环境、三种主题化受伤剑效果全部在浏览器中生成，不依赖外部音乐、图片或运行时 API。
+一款完全原创、无需后端的 **Three.js + WebXR** 双剑节奏游戏。十首程序化原创曲、十套实时动态世界、固定八向切割箭头、自动与纯享模式，以及本地歌曲自动谱面都在浏览器端完成；上传的音乐不会离开设备。
+
+在线游玩：<https://nekobyran.github.io/riftblade-webxr/>
+
+## 三种模式
+
+- **标准**：左/右剑按颜色与箭头方向斩击，计算 Perfect、连击、精准度与生命值。
+- **AI 自动**：AI 按谱面时间零误差挥剑并完成 Perfect 斩击，保留碎裂、剑光、节拍灯光与得分演出。
+- **纯享**：隐藏音符与计分干扰，只播放音乐和完整的节拍响应世界。
+
+## 十首原创曲与世界
+
+| 曲目 | BPM | 编曲方向 | 动态世界 |
+| --- | ---: | --- | --- |
+| 霓虹潮汐 / Neon Tide Run | 132 | Liquid synthwave | 雨幕霓虹海堤 |
+| 余烬回路圣咏 / Ember Circuit Choir | 104 | Industrial ritual | 熔炉机械圣堂 |
+| 玻璃轨道季风 / Glass Orbit Monsoon | 148 | Tabla drum & bass | 零重力棱镜花园 |
+| 樱离子梦 / Sakura Ion Reverie | 126 | Future kagura garage | 离子樱花神社 |
+| 深渊轨道狂潮 / Abyss Rail Frenzy | 174 | Neuro drum & bass | 深海磁悬轨道 |
+| 日神升空 / Helios Lift | 124 | Euphoric solar house | 日冕升降圣殿 |
+| 冰晶圣堂摇篮曲 / Cryo Cathedral Lullaby | 92 | Glacial trip-hop | 极光冰晶教堂 |
+| 翡翠天幕心跳 / Jade Canopy Heartbeat | 118 | Organic tribal house | 生物荧光雨林 |
+| 沙冠序曲 / Dune Crown Overture | 112 | Cinematic desert bass | 沙海巨像王庭 |
+| 像素虚空超驰 / Pixel Void Overdrive | 160 | Chiptune breakcore | 像素黑洞街机 |
+
+每首曲目均由 Web Audio API 实时合成，包含独立调式、鼓组、低音、和弦/氛围、旋律与段落动态，不使用外部版权音频。
 
 ## 游玩方式
 
-- **VR**：使用支持 WebXR `immersive-vr` 的头显浏览器，通过 HTTPS 打开页面，选择曲目后进入沉浸模式。左右手控制器分别驱动两把光刃。
-- **桌面试玩**：移动鼠标定位；左/右键分别挥动双刃。`A/S/D/F` 控左剑，`J/K/L/;` 控右剑，`Q/E` 可快速切击；`Esc` 暂停。
-- 建议使用耳机，并在开始曲目前允许网页播放声音。
+### Quest / WebXR
 
-## 三座原创世界
+1. 用支持 `immersive-vr` 的头显浏览器通过 HTTPS 打开在线页面。
+2. 点击“进入 VR”。在头显内用控制器射线选择曲目、翻页、切换模式并开始。
+3. 红/蓝控制器驱动两把主题光刃；斩击靠近玩家的四列双行方块，箭头固定显示八种切割方向。
+4. 视野下方的亚克力 3D HUD 实时显示计时、进度、分数、连击、准确率与命中/失误，并弹出 Perfect 与本次加分；命中同时触发光环、碎片和控制器震动。
 
-1. **NEON TIDE RUN / 霓虹潮汐** — 132 BPM liquid synthwave，穿越雨幕数据堤与跃迁环；受伤剑化为电涌浪花。
-2. **EMBER CIRCUIT CHOIR / 余烬回路圣咏** — 104 BPM 工业仪式慢拍，熔炉圣堂与活塞拱门随鼓点呼吸；受伤剑迸裂熔岩余烬。
-3. **GLASS ORBIT MONSOON / 玻璃轨道季风** — 148 BPM 零重力 tabla drum & bass，六边轨道、棱镜雨与旋转玻璃花园；受伤剑发生彩色晶体爆裂。
+### 电脑
+
+- 移动鼠标控制剑位，左/右键挥动双刃。
+- `A/S/D/F` 控制左剑，`J/K/L/;` 控制右剑，`Q/E` 快速切击。
+- `Esc` 暂停/继续，`M` 静音。
+
+### 手机/平板
+
+- 左、右两个虚拟摇杆分别控制两把光刃。
+- 在视角触控区拖动以转向，使用独立暂停按钮控制游戏。
+- 支持横竖屏、安全区与触控降级画质。
+
+## 上传自己的歌曲
+
+在选曲页选择设备上的音频文件。浏览器会在本地解码 PCM、检测 onset、估算 BPM，并生成四列双行的八向谱面与配色主题。整个流程没有服务器、没有上传接口；刷新页面后自定义曲目会被释放。
 
 ## 本地开发
 
-Windows 下推荐使用项目脚本，依赖和构建产物固定写入 D 盘：
+Windows 下使用项目脚本，依赖缓存、SDK 与构建产物固定写入 D 盘：
 
 ```powershell
 pwsh -NoProfile -File .\command\Invoke-WebXR.ps1 -Action Install
 pwsh -NoProfile -File .\command\Invoke-WebXR.ps1 -Action Check
-pwsh -NoProfile -File .\command\Invoke-WebXR.ps1 -Action Dev
+pwsh -NoProfile -File .\command\Invoke-WebXR.ps1 -Action Dev -Port 4273
 ```
 
-也可在已有 Node.js 环境中执行 `npm ci && npm run dev`。
+也可在已有 Node.js 环境中运行 `npm ci && npm run dev`。
 
 ## 静态发布
 
-仓库内置 GitHub Pages Actions。推送 `main` 后会依次安装锁定依赖、运行游戏逻辑测试、构建静态文件并发布。WebXR 需要安全上下文；GitHub Pages 的 HTTPS 满足这一条件。
+仓库内置 GitHub Pages Actions。推送 `main` 后会安装锁定依赖、运行 Vitest、构建静态文件并发布。WebXR 需要安全上下文，GitHub Pages 的 HTTPS 满足条件。
 
 ## 技术
 
-Three.js · WebXR · Web Audio API · Vite · Vitest
+Three.js · WebXR · Web Audio API · EffectComposer / UnrealBloomPass · CanvasTexture · Vite · Vitest
 
-> 这是原创作品，与任何商业节奏游戏或音乐版权方无关联。
+> 这是原创作品，与 Beat Games、Beat Saber 或任何商业音乐版权方无关联。玩法语义参考公开的节奏切割交互，但没有复制商标、音乐、模型或美术资源。

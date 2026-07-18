@@ -1,9 +1,16 @@
 import { CutDirection, GamePhase, Hand } from '../shared/contracts.js';
 
 export const LANES = Object.freeze([-1.5, -0.5, 0.5, 1.5]);
+// Beatmap lanes stay compatible with the authored -1.5…1.5 coordinate system,
+// while the rendered play field is narrowed to an ergonomic 1.86 m span.
+// This keeps every block inside a natural two-arm sweep in room-scale XR.
+export const LANE_WORLD_SCALE = 0.62;
 export const ROW_HEIGHT = 0.86;
-export const NOTE_PLANE_Z = -1.15;
-export const SPAWN_Z = -16;
+export const NOTE_ROW_COUNT = 2;
+// The judgement plane is intentionally inside arm's reach in room-scale XR.
+// Desktop uses the same plane with a closer spectator camera.
+export const NOTE_PLANE_Z = -0.82;
+export const SPAWN_Z = -12;
 
 export const DEFAULT_RULES = Object.freeze({
   spawnAhead: 2.35,
@@ -47,11 +54,11 @@ export function multiplierForCombo(combo) {
 }
 
 export function laneToX(lane) {
-  return Number.isFinite(lane) ? lane : 0;
+  return Number.isFinite(lane) ? lane * LANE_WORLD_SCALE : 0;
 }
 
 export function rowToY(row) {
-  return 0.75 + Math.max(0, Math.min(2, Number(row) || 0)) * ROW_HEIGHT;
+  return 0.82 + Math.max(0, Math.min(NOTE_ROW_COUNT - 1, Number(row) || 0)) * ROW_HEIGHT;
 }
 
 export function noteWorldPosition(note, currentTime, rules = DEFAULT_RULES) {
@@ -148,11 +155,15 @@ export class ScoreKeeper {
   constructor(rules = DEFAULT_RULES) {
     this.rules = rules;
     this.state = createGameState({ phase: GamePhase.MENU, health: rules.maxHealth });
+    this.hasStarted = false;
   }
 
   setPhase(phase, at = 0) {
     this.state.phase = phase;
-    if (phase === GamePhase.PLAYING && !this.state.startedAt) this.state.startedAt = at;
+    if (phase === GamePhase.PLAYING && !this.hasStarted) {
+      this.state.startedAt = at;
+      this.hasStarted = true;
+    }
     if (phase === GamePhase.RESULTS) this.state.endedAt = at;
     return this.snapshot();
   }
