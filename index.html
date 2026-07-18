@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070d" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="RIFT//BLADE 光痕裂界——三首原创曲目、三座动态世界的 WebXR 双剑节奏体验。"
+    />
+    <meta property="og:title" content="RIFT//BLADE 光痕裂界" />
+    <meta
+      property="og:description"
+      content="在星港、花火神域与熔炉深渊中挥舞双剑。支持 WebXR VR 与桌面试玩。"
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="./riftblade-mark.svg" type="image/svg+xml" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <title>RIFT//BLADE — 光痕裂界</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#app">跳到游戏菜单</a>
+    <main id="app" aria-live="polite"></main>
+    <canvas id="game-canvas" aria-label="RIFT BLADE 三维游戏画面"></canvas>
+    <noscript>
+      <section class="noscript-card">
+        <h1>RIFT//BLADE</h1>
+        <p>这段 WebXR 体验需要启用 JavaScript。</p>
+      </section>
+    </noscript>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

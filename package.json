@@ -1,0 +1,21 @@
+{
+  "name": "riftblade-webxr",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "An original three-track WebXR rhythm blade experience.",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "check": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.7",
+    "vitest": "^3.2.4"
+  }
+}

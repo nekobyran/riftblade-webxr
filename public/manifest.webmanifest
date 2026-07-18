@@ -1,0 +1,18 @@
+{
+  "name": "RIFT//BLADE 光痕裂界",
+  "short_name": "RIFT//BLADE",
+  "description": "An original three-world WebXR rhythm blade experience.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#05070d",
+  "theme_color": "#05070d",
+  "icons": [
+    {
+      "src": "./riftblade-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

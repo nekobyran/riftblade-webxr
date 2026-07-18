@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="RIFT BLADE mark">
+  <defs>
+    <linearGradient id="g" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#66F6FF"/>
+      <stop offset=".52" stop-color="#7A5CFF"/>
+      <stop offset="1" stop-color="#FF4F9A"/>
+    </linearGradient>
+  </defs>
+  <path fill="#05070D" d="M9 2h46l7 7v46l-7 7H9l-7-7V9z"/>
+  <path fill="none" stroke="url(#g)" stroke-width="3" d="M10.5 4.5h43L59.5 10v43L54 59.5H10L4.5 54V10z"/>
+  <path fill="url(#g)" d="m17 45 9-28h7l-3.8 11H42l5-11h4l-9 28h-7l3.8-11H27l-6 11z"/>
+</svg>
