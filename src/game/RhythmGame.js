@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { createBeatmap, getTrack } from '../data/tracks.js';
+import { trackTitleZh } from '../data/trackLocalization.js';
 import { CutDirection, GamePhase, GameplayEvent, Hand } from '../shared/contracts.js';
 import {
   BeatmapRuntime,
@@ -18,9 +19,11 @@ import {
   noteWorldPosition,
   rowToY,
 } from './RhythmLogic.js';
-import { VRMenu } from './VRMenu.js';
-import { VRHud, createHapticProfile } from './VRHud.js';
+import { VRMenu, VR_MENU_ACTIONS } from './VRMenu.js';
+import { VRHud, VR_HUD_ACTIONS, createHapticProfile } from './VRHud.js';
 import { CosmicBackdrop } from './CosmicBackdrop.js';
+import { BlackHoleBackdrop } from './BlackHoleBackdrop.js';
+import { SaberTrail } from './SaberTrail.js';
 
 export const GAME_MODES = Object.freeze({ STANDARD: 'standard', AUTO: 'auto', ZEN: 'zen' });
 
@@ -118,6 +121,7 @@ const HAND_COLORS = Object.freeze({
 });
 
 const TOUCH_HIT_WINDOW = 0.32;
+const DESKTOP_SABER_Z = -0.62;
 
 export class RhythmGame {
   constructor({ canvas, eventTarget = new EventTarget(), music = null, tracks = [], mode = GAME_MODES.STANDARD, onVRSelection = null } = {}) {
@@ -148,7 +152,10 @@ export class RhythmGame {
     this.obstacleGroup = new THREE.Group();
     this.environmentGroup = new THREE.Group();
     this.cosmicBackdrop = null;
+    this.blackHoleBackdrop = null;
     this.sabers = new Map();
+    this.saberTrails = new Map();
+    this.saberTrailSamples = new Map();
     this.controllers = [];
     this.grips = [];
     this.controllerState = new Map();
@@ -167,6 +174,7 @@ export class RhythmGame {
     this.dodgeState = { lane: 0, targetLane: 0, visualX: 0 };
     this.viewRotation = { yaw: 0, pitch: 0 };
     this.reducedMotion = false;
+    this.motionQuery = null;
     this.lowPower = false;
     this.disposed = false;
     this._boundFrame = (time, frame) => this._frame(time, frame);
@@ -174,6 +182,7 @@ export class RhythmGame {
     this._boundPointerMove = (event) => this._onPointerMove(event);
     this._boundPointerDown = (event) => this._onPointerDown(event);
     this._boundContextMenu = (event) => event.preventDefault();
+    this._boundMotionPreferenceChange = (event) => this._setReducedMotion(Boolean(event?.matches));
     this._boundSessionStart = () => {
       this.renderer?.setPixelRatio?.(1);
       this.renderer?.xr?.setFoveation?.(this.lowPower ? 1 : 0.65);
@@ -183,8 +192,9 @@ export class RhythmGame {
       // ray-interactive selector at the start of the XR session.
       if (this.phase === GamePhase.PLAYING) this.pause();
       this.vrHud?.setPresenting?.(true);
+      this.vrMenu?.showSelection?.();
       this.openVRMenu('sessionstart');
-      if (this.vrButton) this.vrButton.textContent = 'EXIT VR';
+      if (this.vrButton) this.vrButton.textContent = '退出 VR';
       this._emit(GameplayEvent.XR_CHANGE, { active: true, presenting: true, supported: true });
     };
     this._boundSessionEnd = () => {
@@ -192,14 +202,17 @@ export class RhythmGame {
       this._resetDodge();
       this.vrHud?.setPresenting?.(false);
       this.renderer?.setPixelRatio?.(Math.min(globalThis.devicePixelRatio || 1, this.lowPower ? 1.2 : 1.75));
-      if (this.vrButton) this.vrButton.textContent = 'ENTER VR';
+      if (this.vrButton) this.vrButton.textContent = '进入 VR';
       this._emit(GameplayEvent.XR_CHANGE, { active: false, presenting: false, supported: true });
     };
   }
 
   async initialize() {
     if (this.renderer) return;
-    this.reducedMotion = Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    this.motionQuery = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') || null;
+    this.reducedMotion = Boolean(this.motionQuery?.matches);
+    if (this.motionQuery?.addEventListener) this.motionQuery.addEventListener('change', this._boundMotionPreferenceChange);
+    else this.motionQuery?.addListener?.(this._boundMotionPreferenceChange);
     this.lowPower = Boolean(
       globalThis.matchMedia?.('(pointer: coarse)').matches
       || (Number(globalThis.navigator?.deviceMemory) > 0 && Number(globalThis.navigator?.deviceMemory) <= 4),
@@ -259,7 +272,10 @@ export class RhythmGame {
       if (this.disposed || !this.renderer) return;
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.96, 0.68, 0.64);
+      // Bright blades, trails and arrow halos intentionally spill into nearby
+      // pixels on desktop. XR keeps explicit additive shells and real lights,
+      // because headset render loops bypass EffectComposer.
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.92, 0.68, 0.82);
       this.composer.addPass(this.bloomPass);
     } catch {
       // Bloom is enhancement-only; direct Three.js rendering remains playable.
@@ -279,7 +295,11 @@ export class RhythmGame {
   }
 
   _setupVRHud() {
-    this.vrHud = new VRHud({ lowPower: this.lowPower, reducedMotion: this.reducedMotion });
+    this.vrHud = new VRHud({
+      lowPower: this.lowPower,
+      reducedMotion: this.reducedMotion,
+      onAction: (action, state) => this._handleVRHudAction(action, state),
+    });
     this.vrHud.setPresenting(Boolean(this.renderer?.xr?.isPresenting));
     this.vrHud.setMenuVisible(Boolean(this.vrMenu?.visible));
     this.vrHud.setPhase(this.phase);
@@ -295,6 +315,7 @@ export class RhythmGame {
     this.score = new ScoreKeeper(this.rules);
     this._clearNotes();
     this._clearObstacles();
+    this._resetSaberTrails(0);
     this._resetDodge();
     const themeKey = resolveTheme(track);
     this._buildEnvironment(themeKey);
@@ -306,7 +327,7 @@ export class RhythmGame {
       state: this.score.snapshot(),
       mode: this.mode,
       phase: this.phase,
-      title: track?.title || track?.name,
+      title: displayTrackTitle(track),
     }, { force: true });
     this._emitTick(0);
   }
@@ -389,17 +410,68 @@ export class RhythmGame {
   }
 
   _handleVRMenuAction(action, state) {
-    if (action.type === 'track') this.selectTrack(action.trackId, 'vr');
-    else if (action.type === 'mode') this.setMode(action.mode, { source: 'vr', forceEvent: true });
-    else if (action.type === 'start') {
-      if (action.trackId) this.selectTrack(action.trackId, 'vr');
-      this.setMode(action.mode, { source: 'vr', forceEvent: true });
-      this.closeVRMenu('vr-start');
-      this.start().catch((error) => this._emit('game:error', { source: 'vr-menu', message: error?.message || String(error) }));
-    }
-    const detail = { visible: this.vrMenu?.visible ?? false, source: 'vr', action, state, trackId: state.selectedTrackId, mode: state.mode };
+    this._executeVRAction(action, state, 'vr-menu');
+    const current = state || this.vrMenu?.snapshot?.() || {};
+    const detail = {
+      visible: this.vrMenu?.visible ?? false,
+      source: 'vr',
+      surface: 'menu',
+      action,
+      state: current,
+      trackId: current.selectedTrackId || this.track?.id || null,
+      mode: current.mode || this.mode,
+    };
     this.onVRSelection?.(detail);
     this._emit(GameplayEvent.VR_MENU, detail);
+  }
+
+  _handleVRHudAction(action, state) {
+    this._executeVRAction(action, state, 'vr-hud');
+    const detail = {
+      visible: this.vrMenu?.visible ?? false,
+      source: 'vr',
+      surface: 'hud',
+      action,
+      state,
+      trackId: this.track?.id || null,
+      mode: this.mode,
+    };
+    this.onVRSelection?.(detail);
+    this._emit(GameplayEvent.VR_MENU, detail);
+  }
+
+  _executeVRAction(action = {}, state = {}, source = 'vr') {
+    const type = action.type;
+    if (type === VR_MENU_ACTIONS.TRACK) this.selectTrack(action.trackId, 'vr');
+    else if (type === VR_MENU_ACTIONS.MODE) this.setMode(action.mode, { source: 'vr', forceEvent: true });
+    else if (type === VR_MENU_ACTIONS.START) {
+      const trackId = action.trackId || state?.selectedTrackId;
+      if (trackId) this.selectTrack(trackId, 'vr');
+      this.setMode(action.mode || state?.mode || this.mode, { source: 'vr', forceEvent: true });
+      this.closeVRMenu(`${source}-start`);
+      this._runVRTask(() => this.start(), source);
+    } else if (type === VR_MENU_ACTIONS.PAUSE || type === VR_HUD_ACTIONS.PAUSE) {
+      this.pause();
+    } else if (type === VR_MENU_ACTIONS.RESUME || type === VR_HUD_ACTIONS.RESUME) {
+      this.closeVRMenu(`${source}-resume`);
+      this.resume();
+    } else if ([VR_MENU_ACTIONS.RESTART, VR_MENU_ACTIONS.PLAY_AGAIN, VR_HUD_ACTIONS.RESTART, VR_HUD_ACTIONS.PLAY_AGAIN].includes(type)) {
+      this.closeVRMenu(`${source}-restart`);
+      this._runVRTask(() => this.restart(), source);
+    } else if (type === VR_MENU_ACTIONS.RETURN_TO_SELECTION || type === VR_HUD_ACTIONS.RETURN_TO_SELECTION) {
+      this.returnToMenu();
+    }
+  }
+
+  _runVRTask(task, source) {
+    try {
+      const pending = task?.();
+      pending?.catch?.((error) => this._emit('game:error', { source, message: error?.message || String(error) }));
+      return pending;
+    } catch (error) {
+      this._emit('game:error', { source, message: error?.message || String(error) });
+      return null;
+    }
   }
 
   async start() {
@@ -411,6 +483,7 @@ export class RhythmGame {
     this.obstacleRuntime.reset(this.mode === GAME_MODES.ZEN ? [] : this.obstacleMap);
     this.score = new ScoreKeeper(this.rules);
     this._resetDodge();
+    this._resetSaberTrails(0);
     this.fallbackStart = performance.now() / 1000;
     this.clock.start();
     await this.music?.start?.(this.track, 0);
@@ -443,8 +516,8 @@ export class RhythmGame {
     this._clearNotes();
     this._clearObstacles();
     this._resetDodge();
+    this._resetSaberTrails(0);
     this._setPhase(GamePhase.MENU);
-    if (this.renderer?.xr?.isPresenting) this.openVRMenu();
   }
 
   resize() {
@@ -467,6 +540,9 @@ export class RhythmGame {
     this.canvas.removeEventListener?.('pointermove', this._boundPointerMove);
     this.canvas.removeEventListener?.('pointerdown', this._boundPointerDown);
     this.canvas.removeEventListener?.('contextmenu', this._boundContextMenu);
+    this.motionQuery?.removeEventListener?.('change', this._boundMotionPreferenceChange);
+    this.motionQuery?.removeListener?.(this._boundMotionPreferenceChange);
+    this.motionQuery = null;
     this.renderer?.xr?.removeEventListener?.('sessionstart', this._boundSessionStart);
     this.renderer?.xr?.removeEventListener?.('sessionend', this._boundSessionEnd);
     for (const controller of this.controllers) {
@@ -482,8 +558,13 @@ export class RhythmGame {
     this.pendingTimers.clear();
     this.vrMenu?.dispose?.();
     this.vrHud?.dispose?.();
+    for (const trail of new Set(this.saberTrails.values())) trail?.dispose?.();
+    this.saberTrails.clear();
+    this.saberTrailSamples.clear();
     this.cosmicBackdrop?.dispose?.();
     this.cosmicBackdrop = null;
+    this.blackHoleBackdrop?.dispose?.();
+    this.blackHoleBackdrop = null;
     this.touchSlices.clear();
     this._clearNotes();
     this._clearObstacles();
@@ -536,6 +617,17 @@ export class RhythmGame {
       this.scene?.add(this.cosmicBackdrop.group);
     } else {
       this.cosmicBackdrop.setTheme(theme);
+    }
+    if (!this.blackHoleBackdrop) {
+      this.blackHoleBackdrop = new BlackHoleBackdrop({ theme, lowPower: this.lowPower, reducedMotion: this.reducedMotion, seed: 0xb1ac401e });
+      // Keep the singularity dominant but far enough behind the note corridor
+      // to preserve depth judgement. It is geometry and procedural shaders,
+      // not a sky texture or a flat billboard.
+      this.blackHoleBackdrop.group.position.set(0, 5.4, -23.5);
+      this.blackHoleBackdrop.group.scale.setScalar(this.lowPower ? 0.94 : 1.08);
+      this.scene?.add(this.blackHoleBackdrop.group);
+    } else {
+      this.blackHoleBackdrop.setTheme(theme);
     }
     clearGroup(this.environmentGroup);
     this.scene.fog = new THREE.FogExp2(theme.fog, 0.037);
@@ -785,6 +877,8 @@ export class RhythmGame {
       controller.userData.hand = hand;
       controller.userData.saber = this._createSaber(hand);
       controller.add(controller.userData.saber);
+      const trail = this._createSaberTrail(hand);
+      controller.userData.saberTrail = trail;
       const connected = (event) => {
         const reportedHand = event.data?.handedness || controller.userData.hand;
         controller.userData.hand = reportedHand;
@@ -792,6 +886,7 @@ export class RhythmGame {
         const state = this.controllerState.get(controller);
         if (state) state.hand = reportedHand;
         this.sabers.set(reportedHand, controller.userData.saber);
+        this.saberTrails.set(reportedHand, controller.userData.saberTrail);
         this._applySaberStyle(this.damageStyle || 'voltaic');
       };
       const disconnected = () => {
@@ -802,6 +897,10 @@ export class RhythmGame {
       const selectstart = () => {
         if (this.vrMenu?.visible && this.vrMenu.select(controller)) {
           this._pulseHaptics(controller.userData.hand || hand, 0.18, 28);
+          return;
+        }
+        if (this.vrHud?.select?.(controller)) {
+          this._pulseHaptics(controller.userData.hand || hand, 0.2, 32);
           return;
         }
         this._queueControllerSwing(controller, hand);
@@ -822,12 +921,25 @@ export class RhythmGame {
     this._applySaberStyle('voltaic');
   }
 
+  _createSaberTrail(hand) {
+    const trail = new SaberTrail({
+      name: `${hand}-saber-trail`,
+      color: HAND_COLORS[hand] || HAND_COLORS[Hand.RIGHT],
+      lowPower: this.lowPower,
+      reducedMotion: this.reducedMotion,
+    });
+    this.saberTrails.set(hand, trail);
+    this.saberTrailSamples.set(trail, { base: new THREE.Vector3(), tip: new THREE.Vector3() });
+    this.scene?.add(trail.group);
+    return trail;
+  }
+
   _createSaber(hand) {
     const group = new THREE.Group();
     const color = HAND_COLORS[hand];
     const blade = new THREE.Mesh(
       new THREE.CylinderGeometry(0.025, 0.045, 1.25, 18),
-      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 3.65, transparent: true, opacity: 0.97 }),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 5.8, roughness: 0.08, metalness: 0.04, transparent: true, opacity: 0.96 }),
     );
     blade.name = `${hand}-blade`;
     blade.position.y = 0.62;
@@ -845,21 +957,41 @@ export class RhythmGame {
     );
     aura.name = `${hand}-blade-aura`;
     aura.position.y = 0.63;
+    const bloomSpill = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.11, 0.16, 1.43, 16),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color).multiplyScalar(2.1),
+        transparent: true,
+        opacity: this.lowPower ? 0.12 : 0.2,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.BackSide,
+        toneMapped: false,
+      }),
+    );
+    bloomSpill.name = `${hand}-blade-bloom-spill`;
+    bloomSpill.position.y = 0.64;
     const core = new THREE.Mesh(
       new THREE.CylinderGeometry(0.01, 0.016, 1.3, 12),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff).multiplyScalar(2.8), transparent: true, opacity: 0.98, toneMapped: false }),
     );
+    core.name = `${hand}-blade-core`;
     core.position.y = 0.64;
-    const light = new THREE.PointLight(color, this.lowPower ? 1.8 : 3.8, 4.8, 1.65);
+    // This is real scene illumination: nearby notes, floor and obstacles pick
+    // up the blade hue instead of merely showing a painted glow shell.
+    const light = new THREE.PointLight(color, this.lowPower ? 2.6 : 7.4, 5.8, 1.45);
     light.name = `${hand}-blade-light`;
-    light.position.y = 0.72;
+    light.position.y = 0.76;
+    light.userData.baseIntensity = light.intensity;
+    light.userData.environmentSpill = true;
     const hilt = new THREE.Mesh(
       new THREE.CylinderGeometry(0.055, 0.07, 0.22, 16),
       new THREE.MeshStandardMaterial({ color: 0x11131d, metalness: 0.7, roughness: 0.28 }),
     );
     hilt.position.y = -0.05;
     group.rotation.x = -Math.PI / 2;
-    group.add(aura, blade, core, light, hilt);
+    group.userData.realLightEmitter = true;
+    group.add(bloomSpill, aura, blade, core, light, hilt);
     this.sabers.set(hand, group);
     return group;
   }
@@ -870,23 +1002,35 @@ export class RhythmGame {
       const saber = this.sabers.get(hand);
       const blade = saber?.getObjectByName(`${hand}-blade`);
       const aura = saber?.getObjectByName(`${hand}-blade-aura`);
+      const bloomSpill = saber?.getObjectByName(`${hand}-blade-bloom-spill`);
+      const core = saber?.getObjectByName(`${hand}-blade-core`);
       const light = saber?.getObjectByName(`${hand}-blade-light`);
+      const trail = this.saberTrails.get(hand);
       const color = style[hand];
       if (blade?.material) {
         blade.material.color.setHex(color);
         blade.material.emissive.setHex(color);
-        blade.material.emissiveIntensity = styleKey === 'ember' ? 4.2 : styleKey === 'prism' ? 3.45 : 3.8;
+        blade.material.emissiveIntensity = styleKey === 'ember' ? 6.8 : styleKey === 'prism' ? 5.4 : 6.2;
         blade.material.opacity = styleKey === 'prism' ? 0.72 : 0.91;
         blade.material.roughness = styleKey === 'ember' ? 0.48 : 0.18;
       }
       if (aura?.material) {
         aura.material.color.setHex(color);
-        aura.material.opacity = this.lowPower ? 0.25 : styleKey === 'prism' ? 0.34 : 0.44;
+        aura.material.opacity = this.lowPower ? 0.3 : styleKey === 'prism' ? 0.42 : 0.54;
+      }
+      if (bloomSpill?.material) {
+        bloomSpill.material.color.setHex(color).multiplyScalar(styleKey === 'ember' ? 2.6 : 2.2);
+        bloomSpill.material.opacity = this.lowPower ? 0.14 : styleKey === 'prism' ? 0.18 : 0.24;
+      }
+      if (core?.material) {
+        core.material.color.setRGB(2.8, 2.8, 2.8);
       }
       if (light) {
         light.color.setHex(color);
-        light.intensity = this.lowPower ? 1.05 : styleKey === 'ember' ? 3.15 : 2.8;
+        light.intensity = this.lowPower ? 2.35 : styleKey === 'ember' ? 8.4 : 7.2;
+        light.userData.baseIntensity = light.intensity;
       }
+      trail?.setColor?.(color);
     }
     this.damageStyle = styleKey;
   }
@@ -899,8 +1043,8 @@ export class RhythmGame {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'webxr-entry';
-    button.textContent = 'ENTER VR';
-    button.setAttribute('aria-label', 'Enter immersive VR');
+    button.textContent = '进入 VR';
+    button.setAttribute('aria-label', '进入沉浸式 VR');
     Object.assign(button.style, {
       position: 'fixed', left: '50%', top: '24px', transform: 'translateX(-50%)', zIndex: '20', padding: '12px 16px', borderRadius: '999px',
       border: '1px solid rgba(255,255,255,.35)', color: '#fff', background: 'rgba(10,8,24,.72)', backdropFilter: 'blur(12px)',
@@ -914,7 +1058,7 @@ export class RhythmGame {
       try {
         await this.enterVR();
       } catch {
-        button.textContent = 'VR NOT FOUND';
+        button.textContent = '未检测到 VR';
       }
     });
     document.body.append(button);
@@ -1185,6 +1329,7 @@ export class RhythmGame {
     this._updateDodge(elapsed);
     this._updateDesktopSabers();
     if (this.vrMenu?.visible) this._updateVRMenu();
+    for (const controller of this.controllers) this.vrHud?.updateController?.(controller);
     if (this.phase === GamePhase.PLAYING) {
       this._updateControllers(elapsed);
       this._updateObstacles(elapsed);
@@ -1217,14 +1362,48 @@ export class RhythmGame {
       state.previous.copy(state.current);
       const hand = controller.userData.inputSource?.handedness || controller.userData.hand || state.hand;
       const saber = controller.userData.saber;
-      if (saber) state.current.copy(saber.localToWorld(new THREE.Vector3(0, 1.2, 0)));
-      else controller.getWorldPosition(state.current);
+      const trail = controller.userData.saberTrail || this.saberTrails.get(hand);
+      const sample = trail ? this.saberTrailSamples.get(trail) : null;
+      if (saber && sample) {
+        controller.updateWorldMatrix?.(true, true);
+        sample.base.set(0, 0, 0);
+        sample.tip.set(0, 1.28, 0);
+        saber.localToWorld(sample.base);
+        saber.localToWorld(sample.tip);
+        state.current.copy(sample.tip);
+        trail.update(elapsed, sample.base, sample.tip);
+      } else if (saber) {
+        state.current.copy(saber.localToWorld(state.current.set(0, 1.2, 0)));
+      } else controller.getWorldPosition(state.current);
       state.hand = hand;
       if (state.initialized && state.current.distanceToSquared(state.previous) > 0.012) {
         this.sweepQueue.push({ hand, start: state.previous.clone(), end: state.current.clone(), time: elapsed, source: 'xr-motion' });
       }
       state.initialized = true;
     }
+  }
+
+  _resetSaberTrails(time = 0) {
+    for (const trail of new Set(this.saberTrails.values())) trail?.reset?.(time);
+  }
+
+  _setReducedMotion(reduced) {
+    const next = Boolean(reduced);
+    if (next === this.reducedMotion) return next;
+    this.reducedMotion = next;
+    if (this.vrHud) this.vrHud.reducedMotion = next;
+    if (this.cosmicBackdrop) this.cosmicBackdrop.reducedMotion = next;
+    if (this.blackHoleBackdrop) this.blackHoleBackdrop.reducedMotion = next;
+    for (const trail of new Set(this.saberTrails.values())) trail.reducedMotion = next;
+    this._resetSaberTrails(this._gameTime());
+    if (next && this.composer) {
+      this.composer.dispose?.();
+      this.composer = null;
+      this.bloomPass = null;
+    } else if (!next && !this.lowPower && this.renderer && !this.composer) {
+      void this._setupPostProcessing();
+    }
+    return next;
   }
 
   _updateDesktopSabers() {
@@ -1236,10 +1415,12 @@ export class RhythmGame {
       let x = pointerHand && this.desktopPointer.active ? 0.62 + this.desktopPointer.x * 0.72 : hand === Hand.LEFT ? -0.62 : 0.62;
       let y = pointerHand && this.desktopPointer.active ? 1.05 + this.desktopPointer.y * 0.42 : 1.02;
       let autoRotation = null;
+      let autoTarget = null;
       if (this.mode === GAME_MODES.AUTO && this.phase === GamePhase.PLAYING) {
         const target = [...this.runtime.active]
           .filter((note) => note.hand === hand && note.time >= elapsed - 0.08)
           .sort((first, second) => Math.abs(first.time - elapsed) - Math.abs(second.time - elapsed))[0];
+        autoTarget = target || null;
         if (target) {
           const proximity = THREE.MathUtils.clamp(1 - Math.abs(target.time - elapsed) / 0.42, 0, 1);
           const strike = proximity * proximity * (3 - 2 * proximity);
@@ -1248,17 +1429,40 @@ export class RhythmGame {
           autoRotation = directionRotationZ(target.direction) + Math.sin(proximity * Math.PI) * (hand === Hand.LEFT ? -0.32 : 0.32);
         }
       }
+      const previousAutoTarget = controller.userData.desktopAutoTarget;
+      const trail = controller.userData.saberTrail || this.saberTrails.get(hand);
+      if (this.mode === GAME_MODES.AUTO && this.phase === GamePhase.PLAYING) {
+        // A different note is a choreography cut, not one continuous physical
+        // swing. Break history before moving to it so the trail cannot bridge
+        // distant targets into a bright screen-sized polygon.
+        if (previousAutoTarget !== undefined && previousAutoTarget !== autoTarget) trail?.reset?.(elapsed);
+        controller.userData.desktopAutoTarget = autoTarget;
+      } else if (previousAutoTarget !== undefined) {
+        trail?.reset?.(elapsed);
+        delete controller.userData.desktopAutoTarget;
+      }
       // WebXR target rays start hidden with matrixAutoUpdate disabled until an
       // immersive input pose exists. Outside XR these nodes are our visible
       // stage sabers, so restore normal Three.js transforms explicitly.
       controller.visible = true;
       controller.matrixAutoUpdate = true;
-      controller.position.set(x, y, -0.22);
-      controller.rotation.set(
-        0.58 + (pointerHand ? this.desktopPointer.y * 0.12 : 0),
-        0,
-        autoRotation ?? (pointerHand ? -0.12 : 0.12),
-      );
+      const rotationX = 0.58 + (pointerHand ? this.desktopPointer.y * 0.12 : 0);
+      const rotationZ = autoRotation ?? (pointerHand ? -0.12 : 0.12);
+      if (!controller.userData.desktopPoseInitialized || this.reducedMotion) {
+        controller.position.set(x, y, DESKTOP_SABER_Z);
+        controller.rotation.set(rotationX, 0, rotationZ);
+        controller.userData.desktopPoseInitialized = true;
+      } else {
+        // Smooth target changes so an automatic hand-off between notes draws a
+        // readable curved ribbon rather than one giant full-screen sheet.
+        const easing = this.mode === GAME_MODES.AUTO ? 0.34 : 0.46;
+        controller.position.x += (x - controller.position.x) * easing;
+        controller.position.y += (y - controller.position.y) * easing;
+        controller.position.z = DESKTOP_SABER_Z;
+        controller.rotation.x += (rotationX - controller.rotation.x) * easing;
+        controller.rotation.y = 0;
+        controller.rotation.z = wrapAngle(controller.rotation.z + wrapAngle(rotationZ - controller.rotation.z) * easing);
+      }
       controller.updateMatrix?.();
       controller.matrixWorldNeedsUpdate = true;
     }
@@ -1391,7 +1595,7 @@ export class RhythmGame {
     this._flashSaber(Hand.LEFT, true);
     this._flashSaber(Hand.RIGHT, true);
     this.vrHud?.flashMiss?.('OBSTACLE', { redraw: false });
-    this.vrHud?.update?.({ time: this._gameTime(), duration: this.track?.duration, state, mode: this.mode, phase: this.phase, title: this.track?.title || this.track?.name }, { force: true });
+    this.vrHud?.update?.({ time: this._gameTime(), duration: this.track?.duration, state, mode: this.mode, phase: this.phase, title: displayTrackTitle(this.track) }, { force: true });
     this._emit(GameplayEvent.OBSTACLE, { ...settlement, outcome: 'collided', state });
     this._emit(GameplayEvent.DAMAGE, { reason: 'obstacle', obstacle: settlement, state });
     if (state.health <= 0) this._finish(true);
@@ -1419,7 +1623,7 @@ export class RhythmGame {
             state,
             mode: this.mode,
             phase: this.phase,
-            title: this.track?.title || this.track?.name,
+            title: displayTrackTitle(this.track),
           }, { force: true });
           this._flashSaber(sweep.hand, true);
           if (state.health <= 0) this._finish(true);
@@ -1461,14 +1665,14 @@ export class RhythmGame {
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity: note.accent ? 0.25 : 0.14, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide, toneMapped: false }),
     );
     glow.name = 'note-glow';
-    const arrow = this._createDirectionArrow(note.direction || CutDirection.ANY, note.accent);
+    const arrow = this._createDirectionArrow(note.direction || CutDirection.ANY, note.accent, color);
     mesh.add(body, rim, glow, arrow);
     this.noteGroup.add(mesh);
     this.noteMeshes.set(note.id, mesh);
     this._updateNoteMesh(note, this._gameTime());
   }
 
-  _createDirectionArrow(direction, accent) {
+  _createDirectionArrow(direction, accent, glowColor = 0x7defff) {
     const dir = directionVector(direction) || { x: 0, y: 1 };
     const group = new THREE.Group();
     group.name = 'cut-direction';
@@ -1496,15 +1700,34 @@ export class RhythmGame {
       polygonOffset: true,
       polygonOffsetFactor: -1,
     });
+    const hdrGlow = new THREE.Color(glowColor).multiplyScalar(accent ? 3.2 : 2.25);
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: hdrGlow,
+      depthTest: true,
+      depthWrite: false,
+      transparent: true,
+      opacity: this.lowPower ? 0.34 : accent ? 0.68 : 0.5,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -0.5,
+    });
     if (direction === CutDirection.ANY) {
+      const glow = new THREE.Mesh(new THREE.CircleGeometry(0.16, 24), glowMaterial);
+      glow.position.z = -0.006;
+      glow.name = 'any-direction-glow';
       const outline = new THREE.Mesh(new THREE.CircleGeometry(0.13, 24), outlineMaterial);
       outline.position.z = -0.002;
       const dot = new THREE.Mesh(new THREE.CircleGeometry(0.095, 24), faceMaterial);
       dot.position.z = 0.002;
       dot.name = 'any-direction-dot';
-      group.add(outline, dot);
+      group.add(glow, outline, dot);
     } else {
       const geometry = createCutArrowGeometry();
+      const glow = new THREE.Mesh(geometry.clone(), glowMaterial);
+      glow.scale.setScalar(1.52);
+      glow.position.z = -0.006;
+      glow.name = 'direction-arrow-glow';
       const outline = new THREE.Mesh(geometry, outlineMaterial);
       outline.scale.setScalar(1.24);
       outline.position.z = -0.002;
@@ -1512,8 +1735,10 @@ export class RhythmGame {
       arrow.scale.setScalar(0.92);
       arrow.position.z = 0.002;
       arrow.name = 'direction-arrow-face';
-      group.add(outline, arrow);
+      group.add(glow, outline, arrow);
     }
+    group.userData.hdrGlow = true;
+    group.userData.glowColor = new THREE.Color(glowColor).getHex();
     group.position.z = 0.172;
     group.rotation.z = directionRotationZ(direction, dir);
     return group;
@@ -1548,7 +1773,7 @@ export class RhythmGame {
       state: result.state,
       mode: this.mode,
       phase: this.phase,
-      title: this.track?.title || this.track?.name,
+      title: displayTrackTitle(this.track),
     });
     this._flashSaber(note.hand, false, { accent: Boolean(note.accent), automatic: Boolean(judgement?.automatic) });
     this._emit(GameplayEvent.NOTE_HIT, { note: publicNote(note), judgement, noteScore: result.noteScore, state: result.state });
@@ -1564,7 +1789,7 @@ export class RhythmGame {
       state,
       mode: this.mode,
       phase: this.phase,
-      title: this.track?.title || this.track?.name,
+      title: displayTrackTitle(this.track),
     }, { force: true });
     this._emit(GameplayEvent.NOTE_MISS, { note: publicNote(note), reason, state });
     this._emit(GameplayEvent.DAMAGE, { reason, state });
@@ -1577,8 +1802,8 @@ export class RhythmGame {
     const finalTime = this._gameTime();
     this.music?.stop?.();
     this.clock.stop();
-    this._setPhase(GamePhase.RESULTS, finalTime);
     const results = this.score.results(this.mode === GAME_MODES.ZEN ? 0 : this.beatmap.length);
+    this._setPhase(GamePhase.RESULTS, finalTime, results);
     this._emit(GameplayEvent.RESULTS, { ...results, failed, mode: this.mode });
   }
 
@@ -1612,6 +1837,7 @@ export class RhythmGame {
     const beatPulse = Math.exp(-beatFraction * 7.2);
     const barWave = 0.5 + 0.5 * Math.sin((beatPhase / 4) * Math.PI * 2);
     this.cosmicBackdrop?.update?.(elapsed, beatPulse);
+    this.blackHoleBackdrop?.update?.(elapsed, beatPulse);
     if (this.worldLights) {
       this.worldLights.leftRim.intensity = 11 + beatPulse * 15 * motionScale;
       this.worldLights.rightRim.intensity = 11 + (beatPulse * 12 + barWave * 3) * motionScale;
@@ -1619,7 +1845,14 @@ export class RhythmGame {
       this.worldLights.key.intensity = 1.7 + beatPulse * 0.9 * motionScale;
     }
     if (this.scene?.fog?.isFogExp2) this.scene.fog.density = 0.032 + (1 - beatPulse) * 0.006;
-    if (this.bloomPass) this.bloomPass.strength = 0.86 + beatPulse * 0.5 * motionScale;
+    if (this.bloomPass) this.bloomPass.strength = 0.88 + beatPulse * 0.38 * motionScale;
+    for (const hand of [Hand.LEFT, Hand.RIGHT]) {
+      const light = this.sabers.get(hand)?.getObjectByName(`${hand}-blade-light`);
+      const trail = this.saberTrails.get(hand);
+      if (!light) continue;
+      const motionBoost = Math.min(0.42, (trail?.currentIntensity || 0) * 0.075);
+      light.intensity = (light.userData.baseIntensity || light.intensity || 1) * (1 + beatPulse * 0.12 * motionScale + motionBoost);
+    }
     this.environmentGroup.children.forEach((object, index) => {
       const motion = object.userData?.motion;
       const phase = object.userData?.phase || index * 0.31;
@@ -1940,17 +2173,23 @@ export class RhythmGame {
     for (const effect of [...this.damageEffects]) this._removeDamageEffect(effect);
   }
 
-  _setPhase(phase, at = this._gameTime()) {
+  _setPhase(phase, at = this._gameTime(), results = null) {
     this.phase = phase;
     const state = this.score.setPhase(phase, at);
+    if (phase !== GamePhase.PLAYING) this._resetSaberTrails(at);
     this.vrHud?.update?.({
       time: at,
       duration: this.track?.duration,
       state,
       mode: this.mode,
       phase,
-      title: this.track?.title || this.track?.name,
+      title: displayTrackTitle(this.track),
     }, { force: true });
+    this.vrMenu?.setPhase?.(phase, results || state);
+    if (this.renderer?.xr?.isPresenting) {
+      if (phase === GamePhase.PLAYING) this.closeVRMenu(`phase-${phase}`);
+      else if ([GamePhase.MENU, GamePhase.PAUSED, GamePhase.RESULTS].includes(phase)) this.openVRMenu(`phase-${phase}`);
+    }
     this._emit(GameplayEvent.PHASE, { phase, state, mode: this.mode });
   }
 
@@ -1962,7 +2201,7 @@ export class RhythmGame {
       state,
       mode: this.mode,
       phase: this.phase,
-      title: this.track?.title || this.track?.name,
+      title: displayTrackTitle(this.track),
     });
     this._emit(GameplayEvent.TICK, {
       time,
@@ -2009,6 +2248,10 @@ export class RhythmGame {
     for (const id of [...this.obstacleMeshes.keys()]) this._removeObstacleMesh(id);
     clearGroup(this.obstacleGroup);
   }
+}
+
+export function displayTrackTitle(track) {
+  return trackTitleZh(track);
 }
 
 export function createBeatmapFromTrack(track) {

@@ -8,6 +8,7 @@ import {
   approachDistanceFromViewer,
   autoPerfectJudgement,
   createBeatmapFromTrack,
+  displayTrackTitle,
   directionRotationZ,
   evaluateTouchSwipe,
   isAutoPerfectMoment,
@@ -15,6 +16,7 @@ import {
   shouldFinishMode,
 } from './RhythmGame.js';
 import { laneToX, rowToY } from './RhythmLogic.js';
+import { VR_MENU_ACTIONS } from './VRMenu.js';
 
 describe('RhythmGame track integration', () => {
   it.each(TRACKS.map((track) => [track.id, track]))('uses the authored deterministic beatmap for %s', (_id, track) => {
@@ -53,11 +55,16 @@ describe('stable Beat Saber-style note visuals', () => {
     const game = new RhythmGame({ canvas: {} });
     const arrow = game._createDirectionArrow(CutDirection.DOWN_RIGHT, false);
     const face = arrow.getObjectByName('direction-arrow-face');
+    const glow = arrow.getObjectByName('direction-arrow-glow');
 
     expect(face?.geometry?.type).toBe('ShapeGeometry');
     expect(face?.material?.color.getHex()).toBe(0xffffff);
-    expect(arrow.children).toHaveLength(2);
+    expect(arrow.children).toHaveLength(3);
     expect(arrow.children.some((child) => child.material?.color?.getHex() === 0x070914)).toBe(true);
+    expect(glow?.material?.blending).toBe(THREE.AdditiveBlending);
+    expect(glow?.material?.toneMapped).toBe(false);
+    expect(Math.max(glow.material.color.r, glow.material.color.g, glow.material.color.b)).toBeGreaterThan(1);
+    expect(arrow.userData).toMatchObject({ hdrGlow: true });
     expect(arrow.position.z).toBeGreaterThan(0.16);
     expect(arrow.rotation.z).toBeCloseTo(directionRotationZ(CutDirection.DOWN_RIGHT), 6);
     for (const child of arrow.children) {
@@ -72,13 +79,77 @@ describe('stable Beat Saber-style note visuals', () => {
     const saber = game._createSaber(Hand.LEFT);
 
     expect(saber.getObjectByName('left-blade-aura')?.material?.blending).toBe(THREE.AdditiveBlending);
-    expect(saber.getObjectByName('left-blade-light')?.isPointLight).toBe(true);
-    expect(saber.getObjectByName('left-blade-light')?.intensity).toBeGreaterThan(1);
+    expect(saber.getObjectByName('left-blade-bloom-spill')?.material?.blending).toBe(THREE.AdditiveBlending);
+    expect(saber.getObjectByName('left-blade-core')?.material?.toneMapped).toBe(false);
+    const light = saber.getObjectByName('left-blade-light');
+    expect(light?.isPointLight).toBe(true);
+    expect(light?.intensity).toBeGreaterThan(5);
+    expect(light?.userData.environmentSpill).toBe(true);
+    expect(saber.userData.realLightEmitter).toBe(true);
 
     saber.traverse((child) => {
       child.geometry?.dispose?.();
       child.material?.dispose?.();
     });
+  });
+
+  it('turns real desktop and XR saber poses into a persistent speed-responsive world trail', () => {
+    const game = new RhythmGame({ canvas: {} });
+    game.scene = new THREE.Scene();
+    game.player = new THREE.Group();
+    game.scene.add(game.player);
+    game.renderer = { xr: { isPresenting: false } };
+    const controller = new THREE.Group();
+    controller.userData.hand = Hand.LEFT;
+    controller.userData.saber = game._createSaber(Hand.LEFT);
+    controller.add(controller.userData.saber);
+    controller.userData.saberTrail = game._createSaberTrail(Hand.LEFT);
+    game.player.add(controller);
+    game.controllers = [controller];
+    game.controllerState.set(controller, {
+      hand: Hand.LEFT,
+      previous: new THREE.Vector3(),
+      current: new THREE.Vector3(),
+      initialized: false,
+    });
+
+    game._updateControllers(0);
+    controller.position.x = 0.45;
+    game._updateControllers(0.025);
+
+    const trail = controller.userData.saberTrail;
+    expect(trail.visibleSegmentCount).toBeGreaterThan(0);
+    expect(trail.currentSpeed).toBeGreaterThan(5);
+    expect(trail.glowMesh.material.blending).toBe(THREE.AdditiveBlending);
+    expect(trail.group.parent).toBe(game.scene);
+    trail.dispose();
+    controller.userData.saber.traverse((child) => {
+      child.geometry?.dispose?.();
+      child.material?.dispose?.();
+    });
+  });
+
+  it('uses Chinese built-in track titles in every immersive surface', () => {
+    expect(displayTrackTitle({ title: 'Neon Tide Run', metadata: { titleZh: '霓虹潮汐' } })).toBe('霓虹潮汐');
+    expect(displayTrackTitle({})).toBe('未命名曲目');
+  });
+
+  it('mounts a genuine procedural 3D black hole behind the themed stage', () => {
+    const game = new RhythmGame({ canvas: {} });
+    game.scene = new THREE.Scene();
+    game.scene.add(game.environmentGroup);
+
+    game._buildEnvironment('void');
+
+    const blackHole = game.scene.getObjectByName('black-hole-backdrop');
+    expect(blackHole).toBe(game.blackHoleBackdrop.group);
+    expect(blackHole.position.toArray()).toEqual([0, 5.4, -23.5]);
+    expect(blackHole.getObjectByName('black-hole-event-horizon')).toBeTruthy();
+    expect(blackHole.getObjectByName('black-hole-accretion-disk-volume')?.material?.isShaderMaterial).toBe(true);
+    expect(blackHole.getObjectByName('black-hole-gravitational-lens')).toBeTruthy();
+    expect(blackHole.getObjectByName('black-hole-relativistic-jets')).toBeTruthy();
+    expect(game.cosmicBackdrop).toBeTruthy();
+    game.dispose();
   });
 
   it('places the hit plane within one metre of the desktop and XR viewer', () => {
@@ -196,6 +267,52 @@ describe('cross-surface interaction API', () => {
     expect(received.filter(([type]) => type === GameplayEvent.VR_MENU)).toHaveLength(2);
   });
 
+  it('completes pause, continue, replay, results and return-to-selection entirely inside VR', () => {
+    const music = { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), getTime: () => 42 };
+    const game = new RhythmGame({ canvas: {}, music });
+    game.track = { id: 'vr-flow', title: 'VR Flow', metadata: { titleZh: '沉浸流程' }, duration: 60 };
+    game.beatmap = [{ id: 'note' }];
+    game.phase = 'playing';
+    game.renderer = { xr: { isPresenting: true } };
+    game.vrHud = { update: vi.fn(), setMenuVisible: vi.fn() };
+    const menu = {
+      visible: false,
+      state: { selectedTrackId: 'vr-flow', mode: 'standard', screen: 'selection' },
+      setTracks: vi.fn(),
+      setMode: vi.fn(),
+      setVisible: vi.fn((visible) => { menu.visible = visible; }),
+      setPhase: vi.fn((phase, results) => {
+        menu.state.screen = phase === 'paused' ? 'pause' : phase === 'results' ? 'results' : 'selection';
+        menu.state.results = results;
+      }),
+      snapshot: vi.fn(() => ({ ...menu.state })),
+    };
+    game.vrMenu = menu;
+
+    game._executeVRAction({ type: VR_MENU_ACTIONS.PAUSE }, menu.state, 'test');
+    expect(game.phase).toBe('paused');
+    expect(menu.setPhase).toHaveBeenCalledWith('paused', expect.any(Object));
+    expect(menu.visible).toBe(true);
+
+    game._executeVRAction({ type: VR_MENU_ACTIONS.RESUME }, menu.state, 'test');
+    expect(game.phase).toBe('playing');
+    expect(menu.visible).toBe(false);
+
+    game.restart = vi.fn(async () => {});
+    game._executeVRAction({ type: VR_MENU_ACTIONS.PLAY_AGAIN }, menu.state, 'test');
+    expect(game.restart).toHaveBeenCalledOnce();
+
+    game._finish(false);
+    expect(game.phase).toBe('results');
+    expect(menu.setPhase).toHaveBeenCalledWith('results', expect.objectContaining({ score: expect.any(Number), accuracy: expect.any(Number) }));
+    expect(menu.visible).toBe(true);
+
+    game._executeVRAction({ type: VR_MENU_ACTIONS.RETURN_TO_SELECTION }, menu.state, 'test');
+    expect(game.phase).toBe('menu');
+    expect(menu.state.screen).toBe('selection');
+    expect(menu.visible).toBe(true);
+  });
+
   it('matches direct mobile swipes against all eight fixed arrow directions', () => {
     const gestures = {
       [CutDirection.UP]: [0, -60],
@@ -247,6 +364,32 @@ describe('cross-surface interaction API', () => {
     expect(slash?.getObjectByName('touch-saber-slash-aura')?.material?.blending).toBe(THREE.AdditiveBlending);
     expect(slash?.getObjectByName('touch-saber-slash-light')?.intensity).toBeGreaterThan(1);
     game._clearDamageEffects();
+  });
+
+  it('breaks the desktop AI trail when choreography hands off to another note', () => {
+    let time = 4;
+    const game = new RhythmGame({ canvas: {}, music: { getTime: () => time } });
+    const controller = new THREE.Group();
+    const trail = { reset: vi.fn() };
+    controller.userData.hand = Hand.LEFT;
+    controller.userData.saberTrail = trail;
+    game.controllers = [controller];
+    game.renderer = { xr: { isPresenting: false } };
+    game.mode = GAME_MODES.AUTO;
+    game.phase = 'playing';
+    const first = { id: 'first', hand: Hand.LEFT, time: 4.05, lane: -0.5, row: 0, direction: CutDirection.UP };
+    const second = { id: 'second', hand: Hand.LEFT, time: 4.2, lane: 0.5, row: 1, direction: CutDirection.DOWN };
+
+    game.runtime.active = [first];
+    game._updateDesktopSabers();
+    game._updateDesktopSabers();
+    expect(trail.reset).not.toHaveBeenCalled();
+
+    time = 4.12;
+    game.runtime.active = [second];
+    game._updateDesktopSabers();
+    expect(trail.reset).toHaveBeenCalledOnce();
+    expect(trail.reset).toHaveBeenCalledWith(4.12);
   });
 
   it('spawns luminous obstacle walls and settles left-right dodges exactly once', () => {

@@ -1309,7 +1309,8 @@ a:focus-visible {
   width: min(500px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   padding: clamp(24px, 4vw, 40px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   pointer-events: auto;
   text-align: center;
   border-radius: var(--radius-xl);
@@ -1317,10 +1318,12 @@ a:focus-visible {
   animation: dialog-enter 240ms var(--ease-standard) both;
 }
 
-.overlay::before {
+.app-shell[data-phase="countdown"]::before,
+.app-shell[data-phase="paused"]::before,
+.app-shell[data-phase="results"]::before {
   position: fixed;
-  inset: -100vh -100vw;
-  z-index: -2;
+  inset: 0;
+  z-index: 35;
   pointer-events: none;
   content: "";
   background: var(--scrim);

@@ -1,5 +1,6 @@
 import { GameMode, GamePhase, GameplayEvent, normalizeGameMode } from '../shared/contracts.js';
 import { TouchControls } from '../input/TouchControls.js';
+import { trackDifficultyZh, trackStyleZh, trackSummaryZh, trackTitleZh } from '../data/trackLocalization.js';
 
 export const UIEvent = Object.freeze({
   MODE_CHANGE: 'ui:mode-change',
@@ -24,19 +25,19 @@ const DEFAULT_HUD = Object.freeze({
 const MODE_COPY = Object.freeze({
   [GameMode.STANDARD]: {
     label: '标准',
-    eyebrow: 'STANDARD',
+    eyebrow: '标准模式',
     description: '亲手挥动双剑，方向、节拍和连击都会计分。',
     cta: '开始挑战',
   },
   [GameMode.AUTO]: {
     label: 'AI 自动',
-    eyebrow: 'AI AUTO',
-    description: 'AI 按谱面零误差自动挥剑并完成 Perfect，适合看演出与学谱。',
+    eyebrow: 'AI 自动模式',
+    description: 'AI 按谱面零误差自动挥剑并获得完美判定，适合看演出与学谱。',
     cta: '启动 AI 自动打击',
   },
   [GameMode.ZEN]: {
     label: '纯享',
-    eyebrow: 'ZEN',
+    eyebrow: '纯享模式',
     description: '隐藏方块与评分，只留下音乐、世界和光影。',
     cta: '进入纯享模式',
   },
@@ -56,6 +57,20 @@ const UPLOAD_COPY = Object.freeze({
   analyzing: '正在聆听节拍并生成双剑谱面…',
   success: '谱面已生成，曲目已经自动选中。',
   error: '未能生成谱面，请换一个音频文件。',
+});
+
+const GAME_SIGNAL_COPY = Object.freeze({
+  'auto-perfect': 'AI 完美切击',
+  perfect: '完美切击',
+  great: '优秀切击',
+  good: '有效切击',
+  'touch-swipe': '方向切击命中',
+  miss: '错过节拍',
+  late: '切击太晚',
+  early: '切击太早',
+  'wrong-direction': '切击方向错误',
+  'wrong-hand': '光剑颜色错误',
+  obstacle: '撞上障碍',
 });
 
 export class AppUI {
@@ -129,7 +144,7 @@ export class AppUI {
   }
 
   async initialize() {
-    if (!this.root) throw new Error('AppUI requires a root element.');
+    if (!this.root) throw new Error('应用界面缺少根元素。');
 
     this.bindEvents();
     this.touchControls = new TouchControls({
@@ -557,7 +572,7 @@ export class AppUI {
   handleDamage(event) {
     const detail = event.detail ?? {};
     const gameState = detail.state ?? detail;
-    this.state.impact = { at: performance.now(), label: detail.reason || detail.type || '护盾受损' };
+    this.state.impact = { at: performance.now(), label: localizeGameSignal(detail.reason || detail.type, '护盾受损') };
     this.state.hud = {
       ...this.state.hud,
       life: normalizedLife(gameState.life ?? gameState.health, Math.max(0, this.state.hud.life - 0.12)),
@@ -584,7 +599,7 @@ export class AppUI {
       accuracy: normalizedAccuracy(gameState.accuracy, this.state.hud.accuracy),
       hits: numberValue(gameState.hits, this.state.hud.hits + 1),
     };
-    this.state.lastSignal = detail.judgement ? `命中 ${detail.judgement?.reason ?? detail.judgement}` : '完美切击';
+    this.state.lastSignal = localizeGameSignal(detail.judgement?.reason ?? detail.judgement, '完美切击');
     this.render();
   }
 
@@ -598,7 +613,7 @@ export class AppUI {
       life: normalizedLife(gameState.life ?? gameState.health, this.state.hud.life),
       misses: numberValue(gameState.misses, this.state.hud.misses + 1),
     };
-    this.state.lastSignal = detail.reason || '错过节拍';
+    this.state.lastSignal = localizeGameSignal(detail.reason, '错过节拍');
     this.render();
   }
 
@@ -692,7 +707,7 @@ export class AppUI {
       <section class="menu-panel ${shouldShow ? '' : 'is-minimized'}" ${shouldShow ? '' : 'inert'} aria-labelledby="menu-title" aria-hidden="${String(!shouldShow)}">
         <header class="menu-heading">
           <div>
-            <p class="eyebrow">${esc(mode.eyebrow)} · ${this.tracks.length} TRACKS</p>
+            <p class="eyebrow">${esc(mode.eyebrow)} · ${this.tracks.length} 首曲目</p>
             <h1 id="menu-title">选一首，然后切开节拍</h1>
           </div>
           <p>VR、电脑与手机共享同一套动态关卡。</p>
@@ -719,14 +734,14 @@ export class AppUI {
           <section class="launch-card acrylic-card" aria-labelledby="selected-track-title">
             <div class="selected-art" aria-hidden="true"><span>${esc(String(this.tracks.findIndex((item) => item.id === selectedTrack?.id) + 1).padStart(2, '0'))}</span></div>
             <div class="selected-copy">
-              <p class="eyebrow">NOW SELECTED</p>
+              <p class="eyebrow">当前选择</p>
               <h2 id="selected-track-title">${esc(selectedTrack ? this.trackTitle(selectedTrack) : '未选择曲目')}</h2>
               ${selectedTrack && trackOriginalTitle(selectedTrack) !== this.trackTitle(selectedTrack)
                 ? `<p class="track-original-title" lang="en">${esc(trackOriginalTitle(selectedTrack))}</p>`
                 : ''}
-              <p class="artist-line">${esc(selectedTrack?.artist ?? 'RIFT//BLADE ORIGINAL')}</p>
+              <p class="artist-line">${esc(selectedTrack?.artist ?? '光痕裂界原创')}</p>
               <div class="track-facts" aria-label="曲目信息">
-                <span><b>${esc(selectedTrack?.bpm ?? '--')}</b> BPM</span>
+                <span><b>${esc(selectedTrack?.bpm ?? '--')}</b> 拍/分</span>
                 <span><b>${formatTime(selectedTrack?.duration ?? 0)}</b> 时长</span>
                 <span><b>${esc(trackDifficulty(selectedTrack))}</b> 难度</span>
               </div>
@@ -746,7 +761,7 @@ export class AppUI {
 
             <div class="launch-actions">
               <button class="primary-launch" type="button" data-action="start" ${selectedTrack ? '' : 'disabled'}>
-                <span>${esc(mode.cta)}</span><small>${esc(selectedTrack ? `${selectedTrack.bpm ?? '--'} BPM · ${formatTime(selectedTrack.duration ?? 0)}` : '请先选曲')}</small>
+                <span>${esc(mode.cta)}</span><small>${esc(selectedTrack ? `${selectedTrack.bpm ?? '--'} 拍/分 · ${formatTime(selectedTrack.duration ?? 0)}` : '请先选曲')}</small>
               </button>
               <button class="vr-launch" type="button" data-action="enter-vr" ${this.state.xr.secure && (this.state.xr.supported || this.state.xr.status === 'checking') ? '' : 'disabled'}>
                 ${this.state.xr.presenting ? '退出 VR' : '进入 VR 选曲'}
@@ -768,14 +783,14 @@ export class AppUI {
     ].filter(Boolean).join(' ');
     const subtitle = [
       trackOriginalTitle(track) !== this.trackTitle(track) ? trackOriginalTitle(track) : null,
-      track.metadata?.style ?? track.artist ?? 'ORIGINAL SOUND',
+      trackStyleZh(track),
     ].filter(Boolean).join(' · ');
     return `
       <button class="track-row ${selected ? 'is-selected' : ''}" type="button" role="radio" aria-checked="${String(selected)}"
         data-action="select-track" data-track-id="${esc(track.id)}" data-search="${esc(normalizeSearch(haystack))}">
         <span class="track-number">${String(index + 1).padStart(2, '0')}</span>
         <span class="track-identity"><b>${esc(this.trackTitle(track))}</b><small>${esc(subtitle)}</small></span>
-        <span class="track-tempo"><b>${esc(track.bpm ?? '--')}</b><small>BPM</small></span>
+        <span class="track-tempo"><b>${esc(track.bpm ?? '--')}</b><small>拍/分</small></span>
         <span class="selection-dot" aria-hidden="true"></span>
       </button>`;
   }
@@ -809,7 +824,7 @@ export class AppUI {
         <summary>怎么玩？<span>电脑 · 手机 · Quest</span></summary>
         <div class="control-grid">
           <p><b>电脑</b><span>鼠标左右键或键盘控制双剑，Esc 暂停；数字 1–0 快速选曲。</span></p>
-          <p><b>手机</b><span>左右双摇杆控制双剑，在中间区域拖动转视角。</span></p>
+          <p><b>手机</b><span>按住近身方块并沿箭头方向划动；障碍到来时点“左躲”或“右躲”。</span></p>
           <p><b>VR</b><span>用双手柄真实挥剑；菜单内射线指向并按扳机确认。</span></p>
         </div>
       </details>`;
@@ -837,7 +852,7 @@ export class AppUI {
   renderPause() {
     return `
       <section class="overlay pause-overlay" role="dialog" aria-modal="true" aria-labelledby="pause-title">
-        <p class="eyebrow">PAUSED</p><h2 id="pause-title">已暂停</h2><p>调整站位，准备好再继续。</p>
+        <p class="eyebrow">游戏暂停</p><h2 id="pause-title">已暂停</h2><p>调整站位，准备好再继续。</p>
         <div class="dialog-actions"><button class="primary-action" type="button" data-action="resume">继续</button><button class="secondary-action" type="button" data-action="restart">重新开始</button><button class="text-action" type="button" data-action="return-menu">返回选曲</button></div>
       </section>`;
   }
@@ -847,8 +862,8 @@ export class AppUI {
     const accuracy = normalizedAccuracy(results.accuracy, this.state.hud.accuracy);
     return `
       <section class="overlay results-overlay" role="dialog" aria-modal="true" aria-labelledby="results-title">
-        <p class="eyebrow">SHOW COMPLETE</p><h2 id="results-title">${esc(track ? this.trackTitle(track) : '结算')}</h2>
-        <strong class="result-rank">${esc(results.rank ?? results.grade ?? rankFromAccuracy(accuracy))}</strong>
+        <p class="eyebrow">${results.failed ? '挑战结束' : '演出完成'}</p><h2 id="results-title">${esc(track ? this.trackTitle(track) : '结算')}</h2>
+        <strong class="result-rank" aria-label="结算等级">等级 ${esc(results.rank ?? results.grade ?? rankFromAccuracy(accuracy))}</strong>
         <dl class="result-grid"><div><dt>总分</dt><dd>${formatNumber(numberValue(results.score, 0))}</dd></div><div><dt>最高连击</dt><dd>${formatNumber(numberValue(results.bestCombo ?? results.maxCombo, this.state.hud.bestCombo))}</dd></div><div><dt>命中</dt><dd>${formatNumber(numberValue(results.hits, this.state.hud.hits))}</dd></div><div><dt>准度</dt><dd>${Math.round(accuracy)}%</dd></div></dl>
         <div class="dialog-actions"><button class="primary-action" type="button" data-action="restart">再来一次</button><button class="secondary-action" type="button" data-action="return-menu">返回选曲</button></div>
       </section>`;
@@ -878,7 +893,7 @@ export class AppUI {
     if (empty) empty.hidden = visible !== 0;
   }
 
-  trackTitle(track) { return track?.metadata?.titleZh ?? track?.title ?? track?.name ?? track?.displayName ?? track?.id ?? 'UNKNOWN TRACK'; }
+  trackTitle(track) { return trackTitleZh(track); }
 
   applyTrackTheme(track) {
     if (!track?.palette) return;
@@ -938,9 +953,15 @@ function normalizedAccuracy(value, fallback = 100) { const numeric = numberValue
 function normalizedProgress(progress, time, duration) { if (progress !== undefined) return clamp01(progress); const total = numberValue(duration, 0); return total > 0 ? clamp01(numberValue(time, 0) / total) : 0; }
 function formatNumber(value) { return Math.round(numberValue(value, 0)).toLocaleString('zh-CN'); }
 function formatTime(seconds) { const total = Math.max(0, Math.round(numberValue(seconds, 0))); return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`; }
-function trackDifficulty(track) { return track?.metadata?.difficulty ?? track?.difficulty ?? '自适应'; }
-function trackOriginalTitle(track) { return track?.title ?? track?.name ?? track?.displayName ?? track?.id ?? 'UNKNOWN TRACK'; }
-function trackSummary(track) { return track?.description ?? track?.summary ?? track?.metadata?.description ?? `${track?.environment?.name ?? track?.environment?.biome ?? '动态世界'} · 主题光刃与受伤反馈`; }
+function trackDifficulty(track) { return trackDifficultyZh(track); }
+function trackOriginalTitle(track) { return track?.title ?? track?.name ?? track?.displayName ?? track?.id ?? '未命名曲目'; }
+function trackSummary(track) { return trackSummaryZh(track); }
+export function localizeGameSignal(value, fallback = '状态已更新') {
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+  if (/[\u3400-\u9fff]/u.test(raw)) return raw;
+  return GAME_SIGNAL_COPY[raw.toLowerCase()] || fallback;
+}
 function uploadStatusTitle(status) { return ({ idle: '等待选择', analyzing: '正在分析', success: '生成完成', error: '生成失败' })[status] ?? '等待选择'; }
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 function rankFromAccuracy(accuracy) { if (accuracy >= 98) return 'S'; if (accuracy >= 92) return 'A'; if (accuracy >= 84) return 'B'; if (accuracy >= 72) return 'C'; return 'RETRY'; }

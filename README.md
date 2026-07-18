@@ -1,29 +1,29 @@
 # RIFT//BLADE 2.0 光痕裂界
 
-一款完全原创、无需后端的 **Three.js + WebXR** 双剑节奏游戏。十首程序化原创曲、十套实时动态世界、程序化 3D 宇宙星空、固定八向切割箭头、节拍障碍、自动与纯享模式，以及本地歌曲自动谱面都在浏览器端完成；上传的音乐不会离开设备。
+一款完全原创、无需后端的 **Three.js + WebXR** 双剑节奏游戏。十首程序化原创曲、十套实时动态世界、具有事件视界/光子环/厚体吸积盘/引力透镜/双极喷流的真实程序化 3D 黑洞、固定八向发光切割箭头、节拍障碍、自动与纯享模式，以及本地歌曲自动谱面都在浏览器端完成；上传的音乐不会离开设备。
 
 在线游玩：<https://nekobyran.github.io/riftblade-webxr/>
 
 ## 三种模式
 
-- **标准**：左/右剑按颜色与箭头方向斩击，计算 Perfect、连击、精准度与生命值。
-- **AI 自动**：AI 按谱面时间零误差挥剑并完成 Perfect 斩击，保留碎裂、剑光、节拍灯光与得分演出。
+- **标准**：左/右剑按颜色与箭头方向斩击，计算完美判定、连击、精准度与生命值。
+- **AI 自动**：AI 按谱面时间零误差挥剑并完成完美斩击，保留碎裂、剑光、节拍灯光与得分演出。
 - **纯享**：隐藏音符与计分干扰，只播放音乐和完整的节拍响应世界。
 
 ## 十首原创曲与世界
 
-| 曲目 | BPM | 编曲方向 | 动态世界 |
+| 曲目 | 拍速 | 编曲方向 | 动态世界 |
 | --- | ---: | --- | --- |
-| 霓虹潮汐 / Neon Tide Run | 132 | Liquid synthwave | 雨幕霓虹海堤 |
-| 余烬回路圣咏 / Ember Circuit Choir | 104 | Industrial ritual | 熔炉机械圣堂 |
-| 玻璃轨道季风 / Glass Orbit Monsoon | 148 | Tabla drum & bass | 零重力棱镜花园 |
-| 樱离子梦 / Sakura Ion Reverie | 126 | Future kagura garage | 离子樱花神社 |
-| 深渊轨道狂潮 / Abyss Rail Frenzy | 174 | Neuro drum & bass | 深海磁悬轨道 |
-| 日神升空 / Helios Lift | 124 | Euphoric solar house | 日冕升降圣殿 |
-| 冰晶圣堂摇篮曲 / Cryo Cathedral Lullaby | 92 | Glacial trip-hop | 极光冰晶教堂 |
-| 翡翠天幕心跳 / Jade Canopy Heartbeat | 118 | Organic tribal house | 生物荧光雨林 |
-| 沙冠序曲 / Dune Crown Overture | 112 | Cinematic desert bass | 沙海巨像王庭 |
-| 像素虚空超驰 / Pixel Void Overdrive | 160 | Chiptune breakcore | 像素黑洞街机 |
+| 霓虹潮汐 / Neon Tide Run | 132 | 流动合成波 | 雨幕霓虹海堤 |
+| 余烬回路圣咏 / Ember Circuit Choir | 104 | 工业仪式慢拍 | 熔炉机械圣堂 |
+| 玻璃轨道季风 / Glass Orbit Monsoon | 148 | 塔布拉鼓与贝斯 | 零重力棱镜花园 |
+| 樱离子梦 / Sakura Ion Reverie | 126 | 未来神乐车库 | 离子樱花神社 |
+| 深渊轨道狂潮 / Abyss Rail Frenzy | 174 | 神经鼓与贝斯 | 深海磁悬轨道 |
+| 日神升空 / Helios Lift | 124 | 欣快太阳浩室 | 日冕升降圣殿 |
+| 冰晶圣堂摇篮曲 / Cryo Cathedral Lullaby | 92 | 冰川氛围碎拍 | 极光冰晶教堂 |
+| 翡翠天幕心跳 / Jade Canopy Heartbeat | 118 | 有机部落浩室 | 生物荧光雨林 |
+| 沙冠序曲 / Dune Crown Overture | 112 | 电影感沙漠低音 | 沙海巨像王庭 |
+| 像素虚空超驰 / Pixel Void Overdrive | 160 | 芯片碎拍 | 像素黑洞街机 |
 
 每首曲目均由 Web Audio API 实时合成，包含独立调式、鼓组、低音、和弦/氛围、旋律与段落动态，不使用外部版权音频。
 
@@ -32,9 +32,10 @@
 ### Quest / WebXR
 
 1. 用支持 `immersive-vr` 的头显浏览器通过 HTTPS 打开在线页面。
-2. 点击“进入 VR”。在头显内用控制器射线选择曲目、翻页、切换模式并开始。
+2. 点击“进入 VR”。在头显内用控制器射线选择曲目、翻页、切换模式并开始；游戏中可直接暂停、继续或重开，结算后可再来一次或返回选曲。
 3. 红/蓝控制器驱动两把主题光刃；斩击靠近玩家的四列双行方块，箭头固定显示八种切割方向。
-4. 视野下方的亚克力 3D HUD 实时显示计时、进度、分数、连击、准确率与命中/失误，并弹出 Perfect 与本次加分；命中同时触发光环、碎片和控制器震动。
+4. 视野下方的中文亚克力 3D HUD 实时显示计时、进度、分数、连击、准确率与命中/失误，并弹出中文判定与本次加分；命中同时触发光环、碎片和控制器震动。
+5. 双剑使用白热核心、双层加法辉光、真实局部点光源和速度响应世界空间拖尾；方块箭头保留白色可读核心并带独立 HDR 彩色辉光。桌面端另有 Bloom 溢光，Quest/手机保留无需后处理的加法光壳与局部光照。
 
 ### 电脑
 
@@ -50,7 +51,7 @@
 
 ## 上传自己的歌曲
 
-在选曲页选择设备上的音频文件。浏览器会在本地解码 PCM、检测 onset、估算 BPM，并生成四列双行的八向谱面与配色主题。整个流程没有服务器、没有上传接口；刷新页面后自定义曲目会被释放。
+在选曲页选择设备上的音频文件。浏览器会在本地解码 PCM、检测起音峰值、估算拍速，并生成四列双行的八向谱面与配色主题。整个流程没有服务器、没有上传接口；刷新页面后自定义曲目会被释放。
 
 ## 本地开发
 
@@ -70,6 +71,6 @@ pwsh -NoProfile -File .\command\Invoke-WebXR.ps1 -Action Dev -Port 4273
 
 ## 技术
 
-Three.js · WebXR · Web Audio API · 程序化 3D 星空 · EffectComposer / UnrealBloomPass · CanvasTexture · Vite · Vitest
+Three.js · WebXR · Web Audio API · 程序化 3D 黑洞与星空 · HDR 加法材质 · 世界空间光剑拖尾 · EffectComposer / UnrealBloomPass · CanvasTexture · Vite · Vitest
 
 > 这是原创作品，与 Beat Games、Beat Saber 或任何商业音乐版权方无关联。玩法语义参考公开的节奏切割交互，但没有复制商标、音乐、模型或美术资源。
