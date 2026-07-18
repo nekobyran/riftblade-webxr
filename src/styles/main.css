@@ -2246,7 +2246,7 @@ a:focus-visible {
 
 .damage-banner.damage-banner-floating {
   position: fixed;
-  top: max(82px, calc(env(safe-area-inset-top) + 76px));
+  top: max(106px, calc(env(safe-area-inset-top) + 96px));
   right: auto;
   left: 50%;
   z-index: 19;
@@ -2266,5 +2266,15 @@ a:focus-visible {
 
   .hud-pause-floating {
     display: none !important;
+  }
+
+  .damage-banner.damage-banner-floating {
+    top: max(152px, calc(env(safe-area-inset-top) + 142px));
+  }
+}
+
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
+  .damage-banner.damage-banner-floating {
+    top: max(136px, calc(env(safe-area-inset-top) + 126px));
   }
 }
