@@ -63,14 +63,32 @@ describe('stable Beat Saber-style note visuals', () => {
     expect(arrow.children.some((child) => child.material?.color?.getHex() === 0x070914)).toBe(true);
     expect(glow?.material?.blending).toBe(THREE.AdditiveBlending);
     expect(glow?.material?.toneMapped).toBe(false);
-    expect(Math.max(glow.material.color.r, glow.material.color.g, glow.material.color.b)).toBeGreaterThan(1);
-    expect(arrow.userData).toMatchObject({ hdrGlow: true });
+    expect(glow?.material?.opacity).toBeLessThanOrEqual(0.12);
+    expect(glow?.scale.x).toBeCloseTo(1.28, 5);
+    expect(Math.max(glow.material.color.r, glow.material.color.g, glow.material.color.b)).toBeLessThan(0.8);
+    expect(arrow.userData).toMatchObject({ hdrGlow: false, glowProfile: 'restrained' });
     expect(arrow.position.z).toBeGreaterThan(0.16);
     expect(arrow.rotation.z).toBeCloseTo(directionRotationZ(CutDirection.DOWN_RIGHT), 6);
     for (const child of arrow.children) {
       child.geometry?.dispose();
       child.material?.dispose();
     }
+  });
+
+  it('allows only a restrained accent lift instead of a second light-pollution source', () => {
+    const game = new RhythmGame({ canvas: {} });
+    const arrow = game._createDirectionArrow(CutDirection.UP, true, 0x7defff);
+    const glow = arrow.getObjectByName('direction-arrow-glow');
+
+    expect(glow?.material?.opacity).toBeLessThanOrEqual(0.18);
+    expect(glow?.scale.x).toBeLessThanOrEqual(1.34);
+    expect(Math.max(glow.material.color.r, glow.material.color.g, glow.material.color.b)).toBeLessThanOrEqual(1.05);
+    expect(arrow.userData).toMatchObject({ hdrGlow: true, glowProfile: 'restrained' });
+
+    arrow.traverse((child) => {
+      child.geometry?.dispose?.();
+      child.material?.dispose?.();
+    });
   });
 
   it('wraps each blade in an additive aura and a coloured local light', () => {

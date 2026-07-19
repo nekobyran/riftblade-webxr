@@ -1700,20 +1700,23 @@ export class RhythmGame {
       polygonOffset: true,
       polygonOffsetFactor: -1,
     });
-    const hdrGlow = new THREE.Color(glowColor).multiplyScalar(accent ? 3.2 : 2.25);
+    // Keep the cut instruction crisp and readable without competing with the
+    // saber trails or the black-hole accretion light. The additive layer is a
+    // narrow edge whisper, not another HDR light source.
+    const arrowGlow = new THREE.Color(glowColor).multiplyScalar(accent ? 1.05 : 0.78);
     const glowMaterial = new THREE.MeshBasicMaterial({
-      color: hdrGlow,
+      color: arrowGlow,
       depthTest: true,
       depthWrite: false,
       transparent: true,
-      opacity: this.lowPower ? 0.34 : accent ? 0.68 : 0.5,
+      opacity: this.lowPower ? 0.07 : accent ? 0.18 : 0.12,
       blending: THREE.AdditiveBlending,
       toneMapped: false,
       polygonOffset: true,
       polygonOffsetFactor: -0.5,
     });
     if (direction === CutDirection.ANY) {
-      const glow = new THREE.Mesh(new THREE.CircleGeometry(0.16, 24), glowMaterial);
+      const glow = new THREE.Mesh(new THREE.CircleGeometry(accent ? 0.15 : 0.142, 24), glowMaterial);
       glow.position.z = -0.006;
       glow.name = 'any-direction-glow';
       const outline = new THREE.Mesh(new THREE.CircleGeometry(0.13, 24), outlineMaterial);
@@ -1725,7 +1728,7 @@ export class RhythmGame {
     } else {
       const geometry = createCutArrowGeometry();
       const glow = new THREE.Mesh(geometry.clone(), glowMaterial);
-      glow.scale.setScalar(1.52);
+      glow.scale.setScalar(accent ? 1.34 : 1.28);
       glow.position.z = -0.006;
       glow.name = 'direction-arrow-glow';
       const outline = new THREE.Mesh(geometry, outlineMaterial);
@@ -1737,7 +1740,8 @@ export class RhythmGame {
       arrow.name = 'direction-arrow-face';
       group.add(glow, outline, arrow);
     }
-    group.userData.hdrGlow = true;
+    group.userData.glowProfile = 'restrained';
+    group.userData.hdrGlow = Boolean(accent);
     group.userData.glowColor = new THREE.Color(glowColor).getHex();
     group.position.z = 0.172;
     group.rotation.z = directionRotationZ(direction, dir);
