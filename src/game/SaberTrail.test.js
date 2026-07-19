@@ -28,6 +28,9 @@ describe('SaberTrail fixed GPU ribbon', () => {
       vertexColors: true,
     });
     expect(glow.material.blending).toBe(THREE.AdditiveBlending);
+    expect(glow.material.toneMapped).toBe(true);
+    expect(core.material.opacity).toBeGreaterThanOrEqual(0.6);
+    expect(glow.material.opacity).toBeGreaterThanOrEqual(0.35);
     expect(glow.material.opacity).toBeLessThan(core.material.opacity);
     expect(core.geometry.getAttribute('position').usage).toBe(THREE.DynamicDrawUsage);
     expect(core.geometry.getAttribute('color').usage).toBe(THREE.DynamicDrawUsage);
@@ -56,15 +59,15 @@ describe('SaberTrail fixed GPU ribbon', () => {
     expect(coreSpan).toBeGreaterThan(0.35);
     expect(glowSpan).toBeGreaterThan(coreSpan);
     // The ribbon is tip-led rather than a full-blade white fan near the camera.
-    expect(Math.min(core[1], core[4], core[7], core[10])).toBeGreaterThan(0.5);
+    expect(Math.min(core[1], core[4], core[7], core[10])).toBeGreaterThan(0.65);
     expect(Math.min(glow[1], glow[4], glow[7], glow[10])).toBeGreaterThan(0.7);
     const glowColors = trail.glowMesh.geometry.getAttribute('color').array;
     expect(Math.max(glowColors[0], glowColors[1], glowColors[2]))
-      .toBeLessThan(Math.max(glowColors[3], glowColors[4], glowColors[5]) * 0.25);
+      .toBeLessThan(Math.max(glowColors[3], glowColors[4], glowColors[5]) * 0.4);
     trail.dispose();
   });
 
-  it('makes fast swings wider and brighter than slow swings', () => {
+  it('keeps slow swings visible while making fast swings substantially wider and brighter', () => {
     const slow = new SaberTrail({ color: 0xff2255, speedForMax: 8 });
     slow.update(0, base(), tip());
     slow.update(0.2, base(0.12), tip(0.12));
@@ -76,10 +79,13 @@ describe('SaberTrail fixed GPU ribbon', () => {
     expect(fast.currentSpeed).toBeGreaterThan(slow.currentSpeed * 5);
     expect(fast.currentWidth).toBeGreaterThan(slow.currentWidth);
     expect(fast.currentIntensity).toBeGreaterThan(slow.currentIntensity);
+    expect(slow.currentWidth).toBeGreaterThan(0.04);
+    expect(slow.currentIntensity).toBeGreaterThan(2);
     const slowColors = slow.glowMesh.geometry.getAttribute('color').array;
     const fastColors = fast.glowMesh.geometry.getAttribute('color').array;
     expect(maxValue(fastColors, 12)).toBeGreaterThan(maxValue(slowColors, 12));
     expect(maxValue(fastColors, 12)).toBeGreaterThan(1);
+    expect(maxValue(slowColors, 12)).toBeGreaterThan(1);
     slow.dispose();
     fast.dispose();
   });
@@ -106,6 +112,46 @@ describe('SaberTrail fixed GPU ribbon', () => {
 });
 
 describe('SaberTrail bounded lifecycle', () => {
+  it('holds a visible ribbon for desktop/VR and a still-obvious bounded low-power window', () => {
+    const full = new SaberTrail();
+    const lowPower = new SaberTrail({ lowPower: true });
+    const reduced = new SaberTrail({ reducedMotion: true });
+
+    expect(full.trailDuration).toBeGreaterThanOrEqual(0.24);
+    expect(full.trailDuration).toBeLessThanOrEqual(0.32);
+    expect(lowPower.trailDuration).toBeGreaterThanOrEqual(0.16);
+    expect(lowPower.trailDuration).toBeLessThanOrEqual(0.22);
+    expect(reduced.trailDuration).toBeGreaterThanOrEqual(0.12);
+    expect(reduced.trailDuration).toBeLessThan(lowPower.trailDuration);
+    expect(full.maxSamples).toBe(28);
+    expect(lowPower.maxSamples).toBe(18);
+    expect(reduced.maxSamples).toBe(12);
+
+    for (const trail of [full, lowPower, reduced]) {
+      trail.update(0, base(), tip());
+      trail.update(0.02, base(0.12), tip(0.12));
+    }
+    full.update(0.24);
+    lowPower.update(0.17);
+    reduced.update(0.13);
+    expect(full.visibleSegmentCount).toBe(1);
+    expect(lowPower.visibleSegmentCount).toBe(1);
+    expect(reduced.visibleSegmentCount).toBe(1);
+    expect(lowPower.glowMesh.material.opacity).toBeGreaterThanOrEqual(0.4);
+    expect(lowPower.glowMesh.material.toneMapped).toBe(false);
+    expect(lowPower.currentIntensity).toBeGreaterThan(1.5);
+
+    full.update(0.4);
+    lowPower.update(0.3);
+    reduced.update(0.25);
+    expect(full.visibleSegmentCount).toBe(0);
+    expect(lowPower.visibleSegmentCount).toBe(0);
+    expect(reduced.visibleSegmentCount).toBe(0);
+    full.dispose();
+    lowPower.dispose();
+    reduced.dispose();
+  });
+
   it('reuses the exact geometries and arrays while wrapping at its sample capacity', () => {
     const trail = new SaberTrail({ maxSamples: 8 });
     const coreGeometry = trail.coreMesh.geometry;
@@ -163,18 +209,18 @@ describe('SaberTrail bounded lifecycle', () => {
     trail.dispose();
   });
 
-  it('caps Quest and reduced-motion history while preserving a subtle real ribbon', () => {
+  it('caps Quest and reduced-motion history while preserving an HDR ribbon', () => {
     const full = new SaberTrail({ maxSamples: 64 });
     const lowPower = new SaberTrail({ maxSamples: 64, lowPower: true });
     const reduced = new SaberTrail({ maxSamples: 64, reducedMotion: true });
 
     expect(lowPower.maxSamples).toBeLessThan(full.maxSamples / 3);
     expect(reduced.maxSamples).toBeLessThan(lowPower.maxSamples);
-    expect(reduced.trailDuration).toBeLessThan(lowPower.trailDuration);
     reduced.update(0, base(), tip());
     reduced.update(0.02, base(0.2), tip(0.2));
     expect(reduced.visibleSegmentCount).toBe(1);
     expect(reduced.currentWidth).toBeGreaterThan(0);
+    expect(maxValue(reduced.glowMesh.geometry.getAttribute('color').array, 12)).toBeGreaterThan(1);
     full.dispose();
     lowPower.dispose();
     reduced.dispose();

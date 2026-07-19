@@ -8,6 +8,7 @@ import {
   approachDistanceFromViewer,
   autoPerfectJudgement,
   createBeatmapFromTrack,
+  createImpactShakeProfile,
   displayTrackTitle,
   directionRotationZ,
   evaluateTouchSwipe,
@@ -167,6 +168,8 @@ describe('stable Beat Saber-style note visuals', () => {
     expect(blackHole.getObjectByName('black-hole-gravitational-lens')).toBeTruthy();
     expect(blackHole.getObjectByName('black-hole-relativistic-jets')).toBeTruthy();
     expect(game.cosmicBackdrop).toBeTruthy();
+    expect(game.cosmicBackdrop.planet.visible).toBe(false);
+    expect(game.cosmicBackdrop.galaxy.visible).toBe(false);
     game.dispose();
   });
 
@@ -226,9 +229,49 @@ describe('automatic and pure-enjoyment modes', () => {
     expect(game.damageEffects.some((effect) => effect.userData.kind === 'hit')).toBe(true);
     expect(game.damageEffects.some((effect) => effect.userData.kind === 'impact-ring')).toBe(true);
     expect(game.damageEffects.some((effect) => effect.userData.kind === 'split-shards')).toBe(true);
+    expect(game.damageEffects.some((effect) => effect.userData.kind === 'impact-flash')).toBe(true);
+    expect(game.scene.getObjectByName('hit-impact-light')?.intensity).toBeGreaterThan(10);
+    expect(game.impactShake.active).toBe(true);
     expect(game.vrHud.flashHit).toHaveBeenCalledWith(expect.objectContaining({ noteScore: expect.any(Number) }), { redraw: false });
     expect(game.vrHud.update).toHaveBeenCalledWith(expect.objectContaining({ state: expect.objectContaining({ hits: 1 }) }));
     game._clearDamageEffects();
+  });
+
+  it('uses four distinct impact tiers and comfort-scales WebXR and reduced motion', () => {
+    const normal = createImpactShakeProfile();
+    const accent = createImpactShakeProfile({ accent: true });
+    const hurt = createImpactShakeProfile({ hurt: true });
+    const obstacle = createImpactShakeProfile({ obstacle: true });
+    const xr = createImpactShakeProfile({ obstacle: true, xr: true });
+    const reduced = createImpactShakeProfile({ obstacle: true, reducedMotion: true });
+
+    expect(normal.strength).toBeLessThan(accent.strength);
+    expect(accent.strength).toBeLessThan(hurt.strength);
+    expect(hurt.strength).toBeLessThan(obstacle.strength);
+    expect(xr.strength).toBeLessThan(obstacle.strength);
+    expect(reduced.strength).toBeLessThan(normal.strength);
+    expect(reduced.duration).toBeLessThan(obstacle.duration);
+  });
+
+  it('shakes only the gameplay stage and decays back to an exact zero transform', () => {
+    const game = new RhythmGame({ canvas: {} });
+    game.scene = new THREE.Scene();
+    game.camera = new THREE.PerspectiveCamera();
+    game.player = new THREE.Group();
+    game.player.add(game.camera);
+    game.scene.add(game.player);
+    game._ensureImpactStage();
+    const cameraStart = game.camera.position.clone();
+
+    game._triggerImpactShake({ accent: true }, 10);
+    expect(game._animateImpactShake(10.025)).toBe(true);
+    expect(game.impactStage.position.length()).toBeGreaterThan(0);
+    expect(game.camera.position).toEqual(cameraStart);
+
+    expect(game._animateImpactShake(11)).toBe(false);
+    expect(game.impactStage.position.toArray()).toEqual([0, 0, 0]);
+    expect(game.impactStage.rotation.toArray().slice(0, 3)).toEqual([0, 0, 0]);
+    expect(game.impactShake.active).toBe(false);
   });
 });
 
@@ -382,6 +425,38 @@ describe('cross-surface interaction API', () => {
     expect(slash?.getObjectByName('touch-saber-slash-aura')?.material?.blending).toBe(THREE.AdditiveBlending);
     expect(slash?.getObjectByName('touch-saber-slash-light')?.intensity).toBeGreaterThan(1);
     game._clearDamageEffects();
+  });
+
+  it('draws and pools a continuous world-space glow throughout a mobile touch gesture', () => {
+    const note = { id: 'touch-glow', time: 5, lane: -0.5, row: 0, hand: Hand.LEFT, direction: CutDirection.UP };
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 400 }) };
+    const game = new RhythmGame({ canvas, music: { getTime: () => 5 } });
+    game.scene = new THREE.Scene();
+    game.camera = new THREE.PerspectiveCamera(70, 1, 0.05, 100);
+    game.camera.position.set(0, 1.65, 0.18);
+    game.renderer = { xr: { isPresenting: false } };
+    game.phase = 'playing';
+    game.mode = GAME_MODES.STANDARD;
+    game.lowPower = true;
+    game.runtime.active = [note];
+    game._pickTouchNote = vi.fn(() => ({ note, timing: 0 }));
+
+    expect(game.beginTouchSlice(19, 200, 220)).toMatchObject({ accepted: true, noteId: note.id });
+    expect(game.updateTouchSlice(19, 210, 210)).toMatchObject({ accepted: true, pending: true });
+    const trail = game.mobileTouchTrails.get(19);
+    expect(trail.visibleSegmentCount).toBeGreaterThan(0);
+    expect(trail.auraMesh.material.blending).toBe(THREE.AdditiveBlending);
+    expect(trail.coreMesh.material.toneMapped).toBe(false);
+    expect(trail.group.getObjectByName('mobile-touch-trail-light')?.intensity).toBeGreaterThan(3);
+    expect(trail.group.parent).toBe(game.scene);
+
+    expect(game.cancelTouchSlice(19)).toBe(true);
+    expect(game.mobileTouchTrails.size).toBe(0);
+    expect(game.mobileTouchTrailFading.has(trail)).toBe(true);
+    game._updateMobileTouchTrails(game._impactTime() + 0.25);
+    expect(game.mobileTouchTrailFading.size).toBe(0);
+    expect(game.mobileTouchTrailPool).toContain(trail);
+    game._disposeMobileTouchTrails();
   });
 
   it('breaks the desktop AI trail when choreography hands off to another note', () => {

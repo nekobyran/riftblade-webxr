@@ -105,9 +105,9 @@ export function localizeVRHudMiss(reason = 'MISS') {
 }
 
 export function createHapticProfile({ hurt = false, accent = false, automatic = false, lowPower = false } = {}) {
-  if (hurt) return { intensity: lowPower ? 0.6 : 0.68, duration: 78 };
-  const intensity = accent ? 0.54 : automatic ? 0.44 : 0.4;
-  return { intensity: Math.max(0.28, intensity - (lowPower ? 0.04 : 0)), duration: accent ? 54 : 42 };
+  if (hurt) return { intensity: lowPower ? 0.76 : 0.84, duration: 96 };
+  const intensity = accent ? 0.72 : automatic ? 0.58 : 0.52;
+  return { intensity: Math.max(0.4, intensity - (lowPower ? 0.04 : 0)), duration: accent ? 64 : automatic ? 54 : 48 };
 }
 
 /**

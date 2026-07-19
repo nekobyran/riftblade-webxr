@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 
-const DEFAULT_MAX_SAMPLES = 10;
-const LOW_POWER_SAMPLE_CAP = 7;
-const REDUCED_MOTION_SAMPLE_CAP = 5;
+// Enough history for a genuinely continuous ribbon at 72/90 Hz while keeping
+// the two sabers bounded to a very small, fixed GPU footprint.
+const DEFAULT_MAX_SAMPLES = 28;
+const LOW_POWER_SAMPLE_CAP = 18;
+const REDUCED_MOTION_SAMPLE_CAP = 12;
 const HARD_SAMPLE_CAP = 96;
 const MIN_TIME_STEP = 1 / 240;
 const WHITE = new THREE.Color(0xffffff);
@@ -47,11 +49,12 @@ export class SaberTrail {
     this.maxSamples = Math.min(requestedSamples, profileCap);
     this.maxSegments = this.maxSamples - 1;
 
-    const durationCap = this.reducedMotion ? 0.06 : this.lowPower ? 0.085 : 0.11;
-    const defaultDuration = this.reducedMotion ? 0.05 : this.lowPower ? 0.072 : 0.09;
+    const minimumDuration = this.reducedMotion ? 0.12 : this.lowPower ? 0.16 : 0.24;
+    const durationCap = this.reducedMotion ? 0.18 : this.lowPower ? 0.22 : 0.32;
+    const defaultDuration = this.reducedMotion ? 0.15 : this.lowPower ? 0.19 : 0.28;
     this.trailDuration = THREE.MathUtils.clamp(
       positiveNumber(trailDuration, defaultDuration),
-      0.03,
+      minimumDuration,
       durationCap,
     );
     this.speedForMax = positiveNumber(speedForMax, 7.5);
@@ -78,14 +81,19 @@ export class SaberTrail {
     this.group.userData.saberTrail = true;
     this.group.userData.fixedCapacity = true;
     this.group.userData.worldSpace = true;
+    this.group.userData.trailDuration = this.trailDuration;
+    this.group.userData.lowPower = this.lowPower;
+    this.group.userData.reducedMotion = this.reducedMotion;
 
     this.glowMesh = createRibbonLayer(`${name}-glow`, this.maxSegments, {
-      opacity: this.reducedMotion ? 0.035 : this.lowPower ? 0.05 : 0.065,
+      opacity: this.reducedMotion ? 0.28 : this.lowPower ? 0.44 : 0.38,
       renderOrder: 70,
+      toneMapped: !this.lowPower,
     });
     this.coreMesh = createRibbonLayer(`${name}-core`, this.maxSegments, {
-      opacity: this.reducedMotion ? 0.05 : this.lowPower ? 0.065 : 0.085,
+      opacity: this.reducedMotion ? 0.48 : this.lowPower ? 0.72 : 0.62,
       renderOrder: 71,
+      toneMapped: !this.lowPower,
     });
     this.group.add(this.glowMesh, this.coreMesh);
     this.setColor(color);
@@ -230,8 +238,8 @@ export class SaberTrail {
     const glowPositions = this.glowMesh.geometry.getAttribute('position').array;
     const glowColors = this.glowMesh.geometry.getAttribute('color').array;
     const oldest = this.sampleCount === this.maxSamples ? this._writeIndex : 0;
-    const motionScale = this.reducedMotion ? 0.34 : this.lowPower ? 0.72 : 1;
-    const intensityScale = this.reducedMotion ? 0.62 : this.lowPower ? 0.82 : 1;
+    const motionScale = this.reducedMotion ? 0.64 : this.lowPower ? 0.86 : 1;
+    const intensityScale = this.reducedMotion ? 0.72 : this.lowPower ? 0.86 : 1;
     let visible = 0;
     let latestSpeedFactor = 0;
 
@@ -252,24 +260,27 @@ export class SaberTrail {
         1,
       );
       latestSpeedFactor = speedFactor;
-      const coreWidth = (0.0014 + speedFactor * 0.0036) * motionScale;
-      const glowWidth = (0.006 + speedFactor * 0.024) * motionScale;
-      const coreIntensity = (0.76 + speedFactor * 0.5) * intensityScale;
-      const glowIntensity = (0.72 + speedFactor * 0.7) * intensityScale;
+      // A slow deliberate cut must still paint a readable ribbon. Speed then
+      // opens the coloured aura dramatically and drives true HDR bloom rather
+      // than being the only condition under which the trail can be seen.
+      const coreWidth = (0.004 + speedFactor * 0.0085) * motionScale;
+      const glowWidth = (0.018 + speedFactor * 0.058) * motionScale;
+      const coreIntensity = (1.8 + speedFactor * 2.8) * intensityScale;
+      const glowIntensity = (1.35 + speedFactor * 2.25) * intensityScale;
 
       // Only the outer section of the blade paints a trail. Sweeping the whole
       // 1.28 m blade near the camera creates an opaque fan that hides notes and
       // the black hole; a tip-led ribbon still reads as a fast luminous slash.
-      writeRibbonSegment(corePositions, visible * 12, this._bases, this._tips, previousIndex, currentIndex, coreWidth, 0.58);
-      writeRibbonSegment(glowPositions, visible * 12, this._bases, this._tips, previousIndex, currentIndex, glowWidth, 0.7);
-      writeQuadColors(coreColors, visible * 12, this._hotColor, coreIntensity, previousFade, currentFade, 0.28);
-      writeQuadColors(glowColors, visible * 12, this.color, glowIntensity, previousFade, currentFade, 0.16);
+      writeRibbonSegment(corePositions, visible * 12, this._bases, this._tips, previousIndex, currentIndex, coreWidth, 0.68);
+      writeRibbonSegment(glowPositions, visible * 12, this._bases, this._tips, previousIndex, currentIndex, glowWidth, 0.74);
+      writeQuadColors(coreColors, visible * 12, this._hotColor, coreIntensity, previousFade, currentFade, 0.38);
+      writeQuadColors(glowColors, visible * 12, this.color, glowIntensity, previousFade, currentFade, 0.25);
       visible += 1;
     }
 
     this.visibleSegmentCount = visible;
-    this.currentWidth = visible > 0 ? (0.012 + latestSpeedFactor * 0.05) * motionScale : 0;
-    this.currentIntensity = visible > 0 ? (0.76 + latestSpeedFactor * 0.5) * intensityScale : 0;
+    this.currentWidth = visible > 0 ? (0.038 + latestSpeedFactor * 0.12) * motionScale : 0;
+    this.currentIntensity = visible > 0 ? (1.8 + latestSpeedFactor * 2.8) * intensityScale : 0;
     setLayerDrawCount(this.coreMesh, visible);
     setLayerDrawCount(this.glowMesh, visible);
     if (visible > 0) {
@@ -283,7 +294,7 @@ export class SaberTrail {
   }
 }
 
-function createRibbonLayer(name, maxSegments, { opacity, renderOrder }) {
+function createRibbonLayer(name, maxSegments, { opacity, renderOrder, toneMapped }) {
   const geometry = new THREE.BufferGeometry();
   const position = new THREE.BufferAttribute(new Float32Array(maxSegments * 4 * 3), 3);
   const color = new THREE.BufferAttribute(new Float32Array(maxSegments * 4 * 3), 3);
@@ -315,9 +326,10 @@ function createRibbonLayer(name, maxSegments, { opacity, renderOrder }) {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     side: THREE.DoubleSide,
-    // Keep the HDR colour eligible for bloom, but let ACES compress the direct
-    // ribbon instead of clipping every fast swing to a solid white sheet.
-    toneMapped: true,
+    // Desktop passes through ACES before bloom to avoid opaque white sheets;
+    // Quest/mobile preserve HDR values because their direct XR path has no
+    // post-processing bloom.
+    toneMapped,
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = name;

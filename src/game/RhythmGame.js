@@ -24,6 +24,7 @@ import { VRHud, VR_HUD_ACTIONS, createHapticProfile } from './VRHud.js';
 import { CosmicBackdrop } from './CosmicBackdrop.js';
 import { BlackHoleBackdrop } from './BlackHoleBackdrop.js';
 import { SaberTrail } from './SaberTrail.js';
+import { MobileSaberTrail } from './MobileSaberTrail.js';
 
 export const GAME_MODES = Object.freeze({ STANDARD: 'standard', AUTO: 'auto', ZEN: 'zen' });
 
@@ -32,6 +33,27 @@ export function normalizeGameMode(mode) {
   if (['auto', 'automatic', 'autoplay'].includes(value)) return GAME_MODES.AUTO;
   if (['zen', 'pure', 'pure-enjoyment', 'visualizer'].includes(value)) return GAME_MODES.ZEN;
   return GAME_MODES.STANDARD;
+}
+
+export function createImpactShakeProfile({ accent = false, hurt = false, obstacle = false, reducedMotion = false, xr = false } = {}) {
+  const tier = obstacle
+    ? { kind: 'obstacle', strength: 0.132, duration: 0.31, rotation: 0.018 }
+    : hurt
+      ? { kind: 'hurt', strength: 0.096, duration: 0.26, rotation: 0.013 }
+      : accent
+        ? { kind: 'accent', strength: 0.078, duration: 0.23, rotation: 0.0095 }
+        : { kind: 'hit', strength: 0.052, duration: 0.19, rotation: 0.0065 };
+  // In XR the tracked view remains untouched; only the stage shifts, at a
+  // comfort-safe amplitude. Reduced motion keeps a short acknowledgement
+  // instead of silently deleting all impact feedback.
+  const spatialScale = (xr ? 0.55 : 1) * (reducedMotion ? 0.16 : 1);
+  const angularScale = (xr ? 0.42 : 1) * (reducedMotion ? 0.12 : 1);
+  return {
+    kind: tier.kind,
+    strength: tier.strength * spatialScale,
+    duration: reducedMotion ? Math.min(0.11, tier.duration) : tier.duration * (xr ? 0.9 : 1),
+    rotation: tier.rotation * angularScale,
+  };
 }
 
 const THEME_PRESETS = Object.freeze({
@@ -148,6 +170,11 @@ export class RhythmGame {
     this.scene = null;
     this.camera = null;
     this.player = null;
+    // Gameplay scenery lives under one comfort-safe root. Impact feedback can
+    // shake the world for desktop, mobile and WebXR without ever perturbing the
+    // tracked headset camera, controllers, or immersive UI.
+    this.impactStage = new THREE.Group();
+    this.impactStage.name = 'impact-stage';
     this.noteGroup = new THREE.Group();
     this.obstacleGroup = new THREE.Group();
     this.environmentGroup = new THREE.Group();
@@ -169,10 +196,21 @@ export class RhythmGame {
     this.vrHud = null;
     this.desktopPointer = { x: 0, y: 0, active: false };
     this.touchSlices = new Map();
+    this.mobileTouchTrails = new Map();
+    this.mobileTouchTrailFading = new Set();
+    this.mobileTouchTrailPool = [];
     this.touchRaycaster = new THREE.Raycaster();
     this.touchPointer = new THREE.Vector2();
     this.dodgeState = { lane: 0, targetLane: 0, visualX: 0 };
     this.viewRotation = { yaw: 0, pitch: 0 };
+    this.impactShake = {
+      active: false,
+      startedAt: 0,
+      strength: 0,
+      duration: 0,
+      rotation: 0,
+      phase: 0,
+    };
     this.reducedMotion = false;
     this.motionQuery = null;
     this.lowPower = false;
@@ -228,9 +266,7 @@ export class RhythmGame {
     this.player = new THREE.Group();
     this.player.add(this.camera);
     this.scene.add(this.player);
-    this.scene.add(this.environmentGroup);
-    this.scene.add(this.noteGroup);
-    this.scene.add(this.obstacleGroup);
+    this._ensureImpactStage();
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.xr.enabled = true;
@@ -565,6 +601,8 @@ export class RhythmGame {
     this.cosmicBackdrop = null;
     this.blackHoleBackdrop?.dispose?.();
     this.blackHoleBackdrop = null;
+    this._resetImpactShake();
+    this._disposeMobileTouchTrails();
     this.touchSlices.clear();
     this._clearNotes();
     this._clearObstacles();
@@ -612,12 +650,14 @@ export class RhythmGame {
   _buildEnvironment(themeKey) {
     const theme = THEME_PRESETS[themeKey] || THEME_PRESETS.neon;
     this.activeTheme = theme;
+    this._ensureImpactStage();
     if (!this.cosmicBackdrop) {
       this.cosmicBackdrop = new CosmicBackdrop({ theme, lowPower: this.lowPower, reducedMotion: this.reducedMotion, seed: 0x51a7c05 });
-      this.scene?.add(this.cosmicBackdrop.group);
+      this.impactStage.add(this.cosmicBackdrop.group);
     } else {
       this.cosmicBackdrop.setTheme(theme);
     }
+    this._configurePhysicalCosmos();
     if (!this.blackHoleBackdrop) {
       this.blackHoleBackdrop = new BlackHoleBackdrop({ theme, lowPower: this.lowPower, reducedMotion: this.reducedMotion, seed: 0xb1ac401e });
       // Keep the singularity dominant but far enough behind the note corridor
@@ -625,14 +665,18 @@ export class RhythmGame {
       // not a sky texture or a flat billboard.
       this.blackHoleBackdrop.group.position.set(0, 5.4, -23.5);
       this.blackHoleBackdrop.group.scale.setScalar(this.lowPower ? 0.94 : 1.08);
-      this.scene?.add(this.blackHoleBackdrop.group);
+      this.impactStage.add(this.blackHoleBackdrop.group);
     } else {
       this.blackHoleBackdrop.setTheme(theme);
     }
     clearGroup(this.environmentGroup);
-    this.scene.fog = new THREE.FogExp2(theme.fog, 0.037);
-    this.scene.background = new THREE.Color(theme.fog);
-    this.renderer?.setClearColor(theme.fog, 1);
+    // A near-black sky preserves plausible astronomical contrast. Track
+    // colours remain in the playable architecture, blades and particles rather
+    // than tinting the entire universe like a flat theme card.
+    const spaceBlack = new THREE.Color(theme.fog).multiplyScalar(0.12);
+    this.scene.fog = new THREE.FogExp2(spaceBlack, 0.025);
+    this.scene.background = spaceBlack.clone();
+    this.renderer?.setClearColor(spaceBlack, 1);
     if (this.renderer) this.renderer.toneMappingExposure = this.lowPower ? 0.98 : 1.08;
     if (this.worldLights) {
       this.worldLights.leftRim.color.setHex(theme.grid);
@@ -696,6 +740,33 @@ export class RhythmGame {
     else this._buildSignatureWorld(theme);
 
     this.currentTheme = theme.key;
+  }
+
+  _ensureImpactStage() {
+    if (!this.scene) return this.impactStage;
+    if (this.impactStage.parent !== this.scene) this.scene.add(this.impactStage);
+    for (const group of [this.environmentGroup, this.noteGroup, this.obstacleGroup]) {
+      if (group.parent !== this.impactStage) this.impactStage.add(group);
+    }
+    if (this.cosmicBackdrop?.group && this.cosmicBackdrop.group.parent !== this.impactStage) this.impactStage.add(this.cosmicBackdrop.group);
+    if (this.blackHoleBackdrop?.group && this.blackHoleBackdrop.group.parent !== this.impactStage) this.impactStage.add(this.blackHoleBackdrop.group);
+    return this.impactStage;
+  }
+
+  _configurePhysicalCosmos() {
+    if (!this.cosmicBackdrop) return;
+    // The procedural singularity is the astronomical subject. Hide the older
+    // candy-coloured planet/galaxy props and retain only restrained dust,
+    // nebular gas and deep parallax stars around it.
+    if (this.cosmicBackdrop.planet) this.cosmicBackdrop.planet.visible = false;
+    if (this.cosmicBackdrop.galaxy) this.cosmicBackdrop.galaxy.visible = false;
+    for (const cloud of this.cosmicBackdrop.nebulae || []) {
+      const opacity = cloud.material?.uniforms?.opacity;
+      if (opacity) opacity.value = this.lowPower ? 0.045 : 0.065;
+    }
+    const dust = this.cosmicBackdrop.group.getObjectByName('cosmic-stardust');
+    const dustOpacity = dust?.material?.uniforms?.opacity;
+    if (dustOpacity) dustOpacity.value = this.lowPower ? 0.12 : 0.16;
   }
 
   _buildNeonCauseway(theme) {
@@ -1089,6 +1160,8 @@ export class RhythmGame {
       startedAt: globalThis.performance?.now?.() ?? Date.now(),
     };
     this.touchSlices.set(pointerId, gesture);
+    const trail = this._beginMobileTouchTrail(pointerId, picked.note, clientX, clientY);
+    if (trail) gesture.mobileTrail = trail;
     const mesh = this.noteMeshes.get(picked.note.id);
     if (mesh) mesh.userData.touchArmed = true;
     return { accepted: true, noteId: picked.note.id, hand: picked.note.hand, direction: picked.note.direction };
@@ -1099,6 +1172,7 @@ export class RhythmGame {
     if (!gesture) return { accepted: false, reason: 'no-gesture' };
     gesture.lastX = Number(clientX) || 0;
     gesture.lastY = Number(clientY) || 0;
+    this._pushMobileTouchTrail(pointerId, gesture.lastX, gesture.lastY);
     const note = this.runtime.active.find((candidate) => candidate.id === gesture.noteId);
     if (!note) {
       this.cancelTouchSlice(pointerId);
@@ -1119,8 +1193,9 @@ export class RhythmGame {
       const state = this.score.wrongCut('wrong-direction');
       this.vrHud?.flashMiss?.('wrong-direction', { redraw: false });
       this._emit(GameplayEvent.DAMAGE, { reason: 'wrong-direction', source: 'touch-swipe', state });
+      this._triggerImpactShake({ hurt: true });
       this._flashSaber(note.hand, true);
-      this.cancelTouchSlice(pointerId);
+      this.cancelTouchSlice(pointerId, { hurt: true });
       if (state.health <= 0) this._finish(true);
       return { accepted: false, reason: 'wrong-direction', ...evaluation };
     }
@@ -1135,6 +1210,7 @@ export class RhythmGame {
       quality: Math.abs(timing) <= 0.035 ? 'perfect' : Math.abs(timing) <= 0.09 ? 'great' : 'good',
     };
     this.touchSlices.delete(pointerId);
+    this._finishMobileTouchTrail(pointerId);
     this._hitNote(note, judgement);
     return { accepted: true, hit: true, noteId: note.id, judgement };
   }
@@ -1145,12 +1221,13 @@ export class RhythmGame {
     return result;
   }
 
-  cancelTouchSlice(pointerId) {
+  cancelTouchSlice(pointerId, { hurt = false } = {}) {
     const gesture = this.touchSlices.get(pointerId);
     if (!gesture) return false;
     const mesh = this.noteMeshes.get(gesture.noteId);
     if (mesh) mesh.userData.touchArmed = false;
     this.touchSlices.delete(pointerId);
+    this._finishMobileTouchTrail(pointerId, { hurt });
     return true;
   }
 
@@ -1339,6 +1416,8 @@ export class RhythmGame {
     }
     this._animateWorld(elapsed);
     this._animateDamageEffects();
+    this._updateMobileTouchTrails();
+    this._animateImpactShake();
     this.vrHud?.animate?.();
     if (this.renderer?.xr?.isPresenting || !this.composer) this.renderer?.render(this.scene, this.camera);
     else this.composer.render();
@@ -1353,6 +1432,72 @@ export class RhythmGame {
     if (Number.isFinite(musicTime)) return musicTime;
     if (this.clock.running) return this.clock.getElapsedTime();
     return Math.max(0, performance.now() / 1000 - this.fallbackStart);
+  }
+
+  _impactTime() {
+    return (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+  }
+
+  _triggerImpactShake(options = {}, at = this._impactTime()) {
+    const profile = createImpactShakeProfile({
+      ...options,
+      reducedMotion: this.reducedMotion,
+      xr: Boolean(this.renderer?.xr?.isPresenting),
+    });
+    const previous = this.impactShake;
+    const age = Math.max(0, at - previous.startedAt);
+    const remaining = previous.active && previous.duration > 0
+      ? Math.max(0, 1 - age / previous.duration)
+      : 0;
+    previous.active = profile.strength > 0;
+    previous.startedAt = at;
+    // Closely spaced cuts stack just enough to feel musical without allowing a
+    // dense chart to make the whole scene drift or become uncomfortable.
+    previous.strength = Math.min(0.155, profile.strength + previous.strength * remaining * 0.28);
+    previous.duration = profile.duration;
+    previous.rotation = Math.min(0.021, profile.rotation + previous.rotation * remaining * 0.22);
+    previous.phase = (previous.phase + 2.3999632297) % (Math.PI * 2);
+    previous.kind = profile.kind;
+    return { ...profile, strength: previous.strength, rotation: previous.rotation };
+  }
+
+  _animateImpactShake(at = this._impactTime()) {
+    const stage = this.impactStage;
+    const shake = this.impactShake;
+    if (!stage || !shake.active || shake.duration <= 0) {
+      if (stage && (stage.position.lengthSq() > 0 || stage.rotation.x || stage.rotation.y || stage.rotation.z)) {
+        stage.position.set(0, 0, 0);
+        stage.rotation.set(0, 0, 0);
+      }
+      return false;
+    }
+    const progress = THREE.MathUtils.clamp((at - shake.startedAt) / shake.duration, 0, 1);
+    if (progress >= 1) {
+      this._resetImpactShake();
+      return false;
+    }
+    const decay = (1 - progress) ** 2;
+    const wave = (at - shake.startedAt) * 58 + shake.phase;
+    stage.position.set(
+      Math.sin(wave * 1.73) * shake.strength * decay,
+      Math.cos(wave * 2.27) * shake.strength * 0.7 * decay,
+      Math.sin(wave * 2.91 + 0.7) * shake.strength * 0.42 * decay,
+    );
+    stage.rotation.set(
+      Math.sin(wave * 1.37) * shake.rotation * 0.38 * decay,
+      Math.cos(wave * 1.11) * shake.rotation * 0.24 * decay,
+      Math.sin(wave * 1.93) * shake.rotation * decay,
+    );
+    return true;
+  }
+
+  _resetImpactShake() {
+    this.impactShake.active = false;
+    this.impactShake.strength = 0;
+    this.impactShake.duration = 0;
+    this.impactShake.rotation = 0;
+    this.impactStage?.position.set(0, 0, 0);
+    this.impactStage?.rotation.set(0, 0, 0);
   }
 
   _updateControllers(elapsed) {
@@ -1391,6 +1536,8 @@ export class RhythmGame {
     const next = Boolean(reduced);
     if (next === this.reducedMotion) return next;
     this.reducedMotion = next;
+    for (const pointerId of [...this.touchSlices.keys()]) this.cancelTouchSlice(pointerId);
+    this._disposeMobileTouchTrails();
     if (this.vrHud) this.vrHud.reducedMotion = next;
     if (this.cosmicBackdrop) this.cosmicBackdrop.reducedMotion = next;
     if (this.blackHoleBackdrop) this.blackHoleBackdrop.reducedMotion = next;
@@ -1592,6 +1739,8 @@ export class RhythmGame {
     const impact = new THREE.Vector3(settlement.blockedLane * 0.65, 1.3, NOTE_PLANE_Z);
     this._spawnImpactRing(impact, settlement.blockedLane < 0 ? Hand.LEFT : Hand.RIGHT, true);
     this._spawnHitEffect(impact, settlement.blockedLane < 0 ? Hand.LEFT : Hand.RIGHT, true);
+    this._spawnImpactFlash(impact, settlement.blockedLane < 0 ? Hand.LEFT : Hand.RIGHT, true);
+    this._triggerImpactShake({ hurt: true, obstacle: true });
     this._flashSaber(Hand.LEFT, true);
     this._flashSaber(Hand.RIGHT, true);
     this.vrHud?.flashMiss?.('OBSTACLE', { redraw: false });
@@ -1766,9 +1915,12 @@ export class RhythmGame {
     this.runtime.resolve(note.id);
     this._removeNoteMesh(note.id);
     const result = this.score.hit(note, judgement);
-    this._spawnHitEffect(hitPosition, note.hand, Boolean(note.accent || judgement?.automatic));
-    this._spawnImpactRing(hitPosition, note.hand, Boolean(note.accent || judgement?.automatic));
-    this._spawnSplitShards(hitPosition, note.hand, Boolean(note.accent || judgement?.automatic));
+    const accentImpact = Boolean(note.accent || judgement?.automatic);
+    this._spawnHitEffect(hitPosition, note.hand, accentImpact);
+    this._spawnImpactRing(hitPosition, note.hand, accentImpact);
+    this._spawnSplitShards(hitPosition, note.hand, accentImpact);
+    this._spawnImpactFlash(hitPosition, note.hand, accentImpact);
+    this._triggerImpactShake({ accent: accentImpact });
     const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
     this.vrHud?.flashHit?.({ noteScore: result.noteScore, judgement, hand: note.hand, color: style[note.hand] }, { redraw: false });
     this.vrHud?.update?.({
@@ -1797,6 +1949,7 @@ export class RhythmGame {
     }, { force: true });
     this._emit(GameplayEvent.NOTE_MISS, { note: publicNote(note), reason, state });
     this._emit(GameplayEvent.DAMAGE, { reason, state });
+    this._triggerImpactShake({ hurt: true });
     this._flashSaber(note.hand, true);
     if (state.health <= 0) this._finish(true);
   }
@@ -1848,7 +2001,7 @@ export class RhythmGame {
       this.worldLights.beatLight.intensity += (8 + beatPulse * 17 - this.worldLights.beatLight.intensity) * 0.16;
       this.worldLights.key.intensity = 1.7 + beatPulse * 0.9 * motionScale;
     }
-    if (this.scene?.fog?.isFogExp2) this.scene.fog.density = 0.032 + (1 - beatPulse) * 0.006;
+    if (this.scene?.fog?.isFogExp2) this.scene.fog.density = 0.017 + (1 - beatPulse) * 0.004;
     if (this.bloomPass) this.bloomPass.strength = 0.88 + beatPulse * 0.38 * motionScale;
     for (const hand of [Hand.LEFT, Hand.RIGHT]) {
       const light = this.sabers.get(hand)?.getObjectByName(`${hand}-blade-light`);
@@ -1922,6 +2075,120 @@ export class RhythmGame {
     this.camera.updateMatrixWorld?.(true);
     this.touchRaycaster.setFromCamera(this.touchPointer, this.camera);
     return this.touchRaycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  }
+
+  _beginMobileTouchTrail(pointerId, note, clientX, clientY) {
+    const point = this._screenPointToWorld(clientX, clientY, NOTE_PLANE_Z + 0.12);
+    if (!point || !this.scene) return null;
+    const trail = this._acquireMobileTouchTrail(note);
+    if (!trail) return null;
+    const now = this._impactTime();
+    trail.begin(point, now);
+    const light = trail.group.getObjectByName('mobile-touch-trail-light');
+    if (light) {
+      light.position.copy(point);
+      light.intensity = light.userData.baseIntensity;
+    }
+    this.mobileTouchTrails.set(pointerId, trail);
+    return trail;
+  }
+
+  _acquireMobileTouchTrail(note) {
+    const limit = this.lowPower ? 4 : 8;
+    let trail = this.mobileTouchTrailPool.pop() || null;
+    if (!trail && this.mobileTouchTrails.size + this.mobileTouchTrailFading.size < limit) {
+      trail = new MobileSaberTrail({
+        name: 'mobile-touch-saber-trail',
+        color: HAND_COLORS[note?.hand] || HAND_COLORS[Hand.RIGHT],
+        lowPower: this.lowPower,
+        reducedMotion: this.reducedMotion,
+        planeZ: NOTE_PLANE_Z + 0.12,
+      });
+      const light = new THREE.PointLight(0xffffff, this.lowPower ? 5.4 : 9.5, 4.2, 1.65);
+      light.name = 'mobile-touch-trail-light';
+      light.userData.baseIntensity = light.intensity;
+      trail.group.add(light);
+    }
+    if (!trail && this.mobileTouchTrailFading.size) {
+      // A pathological burst cannot grow GPU buffers without bound. Reclaim
+      // the oldest already-ending trail before ever touching an active finger.
+      trail = this.mobileTouchTrailFading.values().next().value;
+      this.mobileTouchTrailFading.delete(trail);
+      trail.reset(this._impactTime());
+    }
+    if (!trail) return null;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = style[note?.hand] || HAND_COLORS[note?.hand] || HAND_COLORS[Hand.RIGHT];
+    trail.setColor(color);
+    const light = trail.group.getObjectByName('mobile-touch-trail-light');
+    light?.color.setHex(color);
+    if (trail.group.parent !== this.scene) this.scene.add(trail.group);
+    return trail;
+  }
+
+  _pushMobileTouchTrail(pointerId, clientX, clientY) {
+    const trail = this.mobileTouchTrails.get(pointerId);
+    if (!trail) return false;
+    const point = this._screenPointToWorld(clientX, clientY, NOTE_PLANE_Z + 0.12);
+    if (!point) return false;
+    const visible = trail.update(this._impactTime(), point);
+    const light = trail.group.getObjectByName('mobile-touch-trail-light');
+    if (light) {
+      light.position.copy(point);
+      light.intensity = light.userData.baseIntensity * (0.72 + Math.min(0.58, trail.currentIntensity * 0.075));
+    }
+    return visible;
+  }
+
+  _finishMobileTouchTrail(pointerId, { hurt = false } = {}) {
+    const trail = this.mobileTouchTrails.get(pointerId);
+    if (!trail) return false;
+    this.mobileTouchTrails.delete(pointerId);
+    if (hurt) {
+      const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+      trail.setColor(style.hurt);
+      trail.group.getObjectByName('mobile-touch-trail-light')?.color.setHex(style.hurt);
+    }
+    trail.end(this._impactTime());
+    if (trail.complete) this._recycleMobileTouchTrail(trail);
+    else this.mobileTouchTrailFading.add(trail);
+    return true;
+  }
+
+  _updateMobileTouchTrails(now = this._impactTime()) {
+    for (const trail of this.mobileTouchTrails.values()) {
+      trail.update(now);
+      const light = trail.group.getObjectByName('mobile-touch-trail-light');
+      if (light) light.intensity = light.userData.baseIntensity * (trail.visibleSegmentCount ? 0.72 + Math.min(0.58, trail.currentIntensity * 0.075) : 0.32);
+    }
+    for (const trail of [...this.mobileTouchTrailFading]) {
+      trail.update(now);
+      const light = trail.group.getObjectByName('mobile-touch-trail-light');
+      if (light) light.intensity = light.userData.baseIntensity * Math.min(1, trail.currentIntensity / 3.2);
+      if (trail.complete) this._recycleMobileTouchTrail(trail);
+    }
+  }
+
+  _recycleMobileTouchTrail(trail) {
+    if (!trail) return;
+    this.mobileTouchTrailFading.delete(trail);
+    trail.reset(this._impactTime());
+    trail.group.removeFromParent();
+    const limit = this.lowPower ? 4 : 8;
+    if (this.mobileTouchTrailPool.length < limit) this.mobileTouchTrailPool.push(trail);
+    else trail.dispose();
+  }
+
+  _disposeMobileTouchTrails() {
+    const trails = new Set([
+      ...this.mobileTouchTrails.values(),
+      ...this.mobileTouchTrailFading,
+      ...this.mobileTouchTrailPool,
+    ]);
+    for (const trail of trails) trail.dispose();
+    this.mobileTouchTrails.clear();
+    this.mobileTouchTrailFading.clear();
+    this.mobileTouchTrailPool.length = 0;
   }
 
   _spawnTouchSlash(gesture, note, success = true) {
@@ -2006,6 +2273,64 @@ export class RhythmGame {
     this.scene.add(points);
     this.damageEffects.push(points);
     if (this.worldLights?.beatLight) this.worldLights.beatLight.intensity += accent ? 18 : 8;
+  }
+
+  _spawnImpactFlash(base, hand, accent = false) {
+    if (!this.scene) return;
+    const style = DAMAGE_STYLES[this.damageStyle] || DAMAGE_STYLES.voltaic;
+    const color = style[hand] || HAND_COLORS[hand] || 0xffffff;
+    const group = new THREE.Group();
+    group.name = 'hit-impact-flash';
+    group.position.copy(base);
+    group.position.z += 0.075;
+    group.renderOrder = 24;
+
+    const hotCore = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(accent ? 0.115 : 0.085, this.lowPower ? 0 : 1),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(0xffffff).multiplyScalar(accent ? 4.2 : 3.4),
+        transparent: true,
+        opacity: 0.96,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    hotCore.name = 'hit-impact-white-core';
+    hotCore.userData.baseOpacity = 0.96;
+    const aura = new THREE.Mesh(
+      new THREE.SphereGeometry(accent ? 0.21 : 0.16, this.lowPower ? 8 : 16, this.lowPower ? 6 : 10),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color).multiplyScalar(accent ? 2.8 : 2.25),
+        transparent: true,
+        opacity: this.lowPower ? 0.48 : 0.62,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.BackSide,
+      }),
+    );
+    aura.name = 'hit-impact-aura';
+    aura.userData.baseOpacity = this.lowPower ? 0.48 : 0.62;
+    group.add(aura, hotCore);
+
+    // Even Quest/mobile gets one short real light flash so nearby blocks and
+    // the lane surface react to a cut instead of the hit being a flat sprite.
+    const light = new THREE.PointLight(color, this.lowPower ? 9 : accent ? 27 : 18, accent ? 4.6 : 3.8, 1.7);
+    light.name = 'hit-impact-light';
+    light.userData.baseIntensity = light.intensity;
+    group.add(light);
+    const now = this._impactTime();
+    group.userData = {
+      born: now,
+      last: now,
+      kind: 'impact-flash',
+      lifetime: this.reducedMotion ? 0.11 : accent ? 0.25 : 0.19,
+      accent,
+      reducedMotion: this.reducedMotion,
+    };
+    this.scene.add(group);
+    this.damageEffects.push(group);
   }
 
   _spawnImpactRing(base, hand, accent = false) {
@@ -2113,6 +2438,19 @@ export class RhythmGame {
       effect.userData.last = now;
       const lifetime = effect.userData.lifetime || 0.72;
       const progress = THREE.MathUtils.clamp(age / lifetime, 0, 1);
+      if (effect.userData.kind === 'impact-flash') {
+        const fade = (1 - progress) ** 2;
+        const scale = effect.userData.reducedMotion
+          ? 0.9 + progress * 0.35
+          : 0.72 + progress * (effect.userData.accent ? 4.2 : 3.25);
+        effect.scale.setScalar(scale);
+        for (const object of effect.children) {
+          if (object.material) object.material.opacity = (object.userData.baseOpacity || 1) * fade;
+          if (object.isPointLight) object.intensity = (object.userData.baseIntensity || 1) * fade;
+        }
+        if (age >= lifetime) this._removeDamageEffect(effect);
+        continue;
+      }
       if (effect.userData.kind === 'impact-ring') {
         const scale = 0.78 + progress * (effect.userData.accent ? 3.4 : 2.7);
         effect.scale.setScalar(scale);
@@ -2180,7 +2518,11 @@ export class RhythmGame {
   _setPhase(phase, at = this._gameTime(), results = null) {
     this.phase = phase;
     const state = this.score.setPhase(phase, at);
-    if (phase !== GamePhase.PLAYING) this._resetSaberTrails(at);
+    if (phase !== GamePhase.PLAYING) {
+      this._resetSaberTrails(at);
+      this._resetImpactShake();
+      for (const pointerId of [...this.touchSlices.keys()]) this.cancelTouchSlice(pointerId);
+    }
     this.vrHud?.update?.({
       time: at,
       duration: this.track?.duration,
@@ -2232,7 +2574,7 @@ export class RhythmGame {
   }
 
   _clearNotes() {
-    this.touchSlices.clear();
+    for (const pointerId of [...this.touchSlices.keys()]) this.cancelTouchSlice(pointerId);
     for (const id of [...this.noteMeshes.keys()]) this._removeNoteMesh(id);
     clearGroup(this.noteGroup);
   }

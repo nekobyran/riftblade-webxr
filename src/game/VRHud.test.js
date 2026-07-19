@@ -155,7 +155,10 @@ describe('VRHud 手柄交互动作', () => {
 
   it('受伤震动强于普通命中', () => {
     const normal = createHapticProfile({ lowPower: true });
+    const accent = createHapticProfile({ accent: true, lowPower: true });
     const damage = createHapticProfile({ hurt: true, lowPower: true });
+    expect(normal.intensity).toBeGreaterThanOrEqual(0.48);
+    expect(accent.intensity).toBeGreaterThan(normal.intensity);
     expect(damage.intensity).toBeGreaterThan(normal.intensity);
     expect(damage.duration).toBeGreaterThan(normal.duration);
   });
